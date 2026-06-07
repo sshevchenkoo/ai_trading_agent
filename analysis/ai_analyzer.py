@@ -44,11 +44,16 @@ SYSTEM_PROMPT = """You are a Solana meme token trading analyst. Evaluate tokens 
 The token has already passed: rule filters, Birdeye security check, and Rugcheck.
 Twitter profile verification and mention search have also been done — results are in the prompt.
 
-You have a tool: search_twitter — use it ONLY if you need additional Twitter data beyond what's provided.
+You have a tool: search_twitter — use it when any of these apply:
+- The token name or description suggests a trending topic, celebrity, or viral meme
+  (e.g. token named "BarronDog" → search "barron trump dog"; "GrokAI" → search "grok ai meme")
+  This finds organic hype that existed BEFORE the token was created — the strongest buy signal.
+- Pre-fetched Twitter mentions are empty or very sparse (< 3 tweets)
+- You want to check a specific angle not covered by the pre-fetched data
 
 Analysis steps:
-1. Read all the token data including Twitter verification result and pre-fetched mentions.
-2. If Twitter mentions are missing or you want to search a specific angle, call search_twitter.
+1. Read all the token data including Twitter verification and pre-fetched mentions.
+2. If the token name/description hints at a real-world narrative, search for that narrative by name.
 3. Evaluate: organic hype vs bots, narrative strength, timing, red flags.
 4. Return your JSON verdict.
 
@@ -179,11 +184,14 @@ def _build_prompt(signal: TokenSignal, birdeye: dict) -> str:
     else:
         tweets_section = "  No tweets found (Twitter may not be configured or no recent mentions)"
 
-    return f"""Analyze this Solana token. Twitter data is pre-fetched below — only call search_twitter if you need an additional angle not covered. Then return your JSON verdict.
+    return f"""Analyze this Solana token. Twitter data is pre-fetched below.
+If the token NAME or DESCRIPTION references a celebrity, trending topic, or viral meme — call search_twitter with that topic name to find organic hype.
+Then return your JSON verdict.
 
 TOKEN:
 - Symbol: ${signal.symbol}
 - Name: {signal.name}
+- Search hint: if "{signal.name}" looks like a real-world name/meme, search Twitter for it
 - Description: {signal.description[:300] if signal.description else "none"}
 - Age: {signal.age_minutes} minutes old
 - Market Cap: ${signal.market_cap_usd:,.0f}
