@@ -20,13 +20,34 @@ Return ONLY valid JSON. No markdown, no extra text, no explanation outside JSON.
 
 
 def _build_prompt(signal: TokenSignal) -> str:
-    tweets_section = "none"
-    if signal.tweet_texts:
+    # Rich tweets with author info
+    if signal.tweets:
         tweets_section = "\n".join(
-            f"  - {t[:200]}" for t in signal.tweet_texts[:5]
+            f"  - [{t.author_name}, {t.author_followers:,} followers"
+            f"{', KOL' if t.is_kol else ''}] "
+            f"{t.likes}L {t.retweets}RT — {t.text[:180]}"
+            for t in signal.tweets[:5]
         )
+    elif signal.tweet_texts:
+        tweets_section = "\n".join(f"  - {t[:200]}" for t in signal.tweet_texts[:5])
+    else:
+        tweets_section = "  none"
 
     kol_section = ", ".join(signal.kol_mentions) if signal.kol_mentions else "none"
+
+    creator_note = ""
+    if signal.creator_rug_count > 0:
+        creator_note = f"\n- ⚠️ Creator previous rug pulls: {signal.creator_rug_count}"
+
+    m = signal.market
+    if m.sol_price_usd:
+        market_section = (
+            f"- SOL price: ${m.sol_price_usd:,.2f} ({m.sol_change_24h_pct:+.1f}% 24h)\n"
+            f"- BTC trend: {m.btc_change_24h_pct:+.1f}% 24h\n"
+            f"- Market mood: {m.market_trend}"
+        )
+    else:
+        market_section = "- Market data unavailable"
 
     return f"""Analyze this Solana token for short-term trading potential:
 
@@ -39,7 +60,7 @@ TOKEN:
 - Liquidity: {signal.liquidity_sol:.1f} SOL
 - Holders: {signal.holder_count}
 - Top 10 holders: {signal.top10_holder_pct:.1f}% of supply
-- Dev wallet sold: {signal.dev_wallet_sold}
+- Dev wallet sold: {signal.dev_wallet_sold}{creator_note}
 - Buy/Sell ratio (1h): {signal.buy_count_1h}/{signal.sell_count_1h}
 - Source: {signal.source}
 
@@ -48,6 +69,9 @@ SOCIAL:
 - KOL mentions: {kol_section}
 - Top tweets:
 {tweets_section}
+
+MARKET CONTEXT:
+{market_section}
 
 Respond with this exact JSON:
 {{

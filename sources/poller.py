@@ -3,6 +3,7 @@ from typing import Callable, Awaitable
 
 from sources.dexscreener import fetch_new_pairs, enrich_signal
 from sources.twitter import fetch_kol_mentions
+from sources.market_data import get_market_context
 from sources.signal import TokenSignal
 from utils.logger import get_logger
 
@@ -52,10 +53,11 @@ class Poller:
         while not self.queue.empty():
             pumpfun_signals.append(self.queue.get_nowait())
 
-        # 2. Fetch DexScreener + Twitter in parallel
-        dex_signals, twitter_mentions = await asyncio.gather(
+        # 2. Fetch DexScreener + Twitter + market data in parallel
+        dex_signals, twitter_mentions, market_ctx = await asyncio.gather(
             fetch_new_pairs(),
             fetch_kol_mentions(),
+            get_market_context(),
         )
 
         # 3. Merge all sources, deduplicate by address
@@ -86,12 +88,13 @@ class Poller:
             *[enrich_signal(sig) for sig in new_tokens.values()]
         )
 
-        # 6. Attach Twitter mentions
+        # 6. Attach Twitter mentions + market context
         for signal in enriched:
             tweets = twitter_mentions.get(signal.symbol.upper(), [])
             if tweets:
                 signal.twitter_mentions_1h = len(tweets)
                 signal.tweet_texts = tweets
+            signal.market = market_ctx
 
         # 7. Mark all as seen
         self._seen.update(new_tokens.keys())
