@@ -8,6 +8,7 @@ from sources.poller import Poller
 from sources.signal import TokenSignal
 from analysis.filters import apply_filters
 from analysis.rugcheck import check_token
+from analysis.ai_analyzer import analyze_token
 from utils.logger import setup_logging, get_logger
 
 log = get_logger("main")
@@ -35,20 +36,45 @@ async def handle_token(signal: TokenSignal):
         _save_token(signal, passed=False)
         return
 
+    # AI analysis
+    analysis = await analyze_token(signal)
+    if analysis is None:
+        # No API key or error — log candidate without AI score
+        log.info(
+            "candidate_no_ai",
+            symbol=signal.symbol,
+            rule_score=signal.rule_score,
+            liquidity_sol=round(signal.liquidity_sol, 1),
+        )
+        _save_token(signal, passed=True)
+        return
+
+    signal.ai_score = analysis["score"]
+    signal.final_score = analysis["final_score"]
     _save_token(signal, passed=True)
 
+    if analysis["final_score"] < settings.ai_score_threshold:
+        log.info(
+            "ai_score_too_low",
+            symbol=signal.symbol,
+            final_score=analysis["final_score"],
+            threshold=settings.ai_score_threshold,
+        )
+        return
+
     log.info(
-        "candidate_ready",
+        "BUY_SIGNAL",
         symbol=signal.symbol,
+        final_score=analysis["final_score"],
+        ai_score=analysis["score"],
         rule_score=signal.rule_score,
-        liquidity_sol=round(signal.liquidity_sol, 1),
-        age_min=signal.age_minutes,
-        twitter_mentions=signal.twitter_mentions_1h,
-        rugcheck_score=rug["score"],
+        confidence=analysis["confidence"],
+        risk=analysis["risk_level"],
+        suggested_sol=analysis["suggested_position_sol"],
+        reasoning=analysis["reasoning"],
     )
 
-    # TODO Phase 2: AI Analyzer
-    # TODO Phase 3: Trade Executor
+    # TODO Phase 3: Trade Executor → execute buy
 
 
 def _save_token(signal: TokenSignal, passed: bool):
@@ -70,6 +96,8 @@ def _save_token(signal: TokenSignal, passed: bool):
                 buy_count_1h=signal.buy_count_1h,
                 sell_count_1h=signal.sell_count_1h,
                 rule_score=signal.rule_score,
+                ai_score=signal.ai_score if signal.ai_score else None,
+                final_score=signal.final_score if signal.final_score else None,
                 passed_filters=passed,
             ))
             session.commit()
