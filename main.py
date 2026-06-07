@@ -6,8 +6,6 @@ from db.models import Token
 from sources.pumpfun import PumpFunCollector
 from sources.poller import Poller
 from sources.signal import TokenSignal
-from analysis.filters import apply_filters
-from analysis.rugcheck import check_token
 from analysis.ai_analyzer import analyze_token
 from utils.logger import setup_logging, get_logger
 
@@ -17,41 +15,26 @@ POLL_INTERVAL_SEC = 300  # 5 minutes
 
 
 async def handle_token(signal: TokenSignal):
-    result = apply_filters(signal)
-    signal.rule_score = result.score
-
-    if not result.passed:
-        log.info("filter_fail", symbol=signal.symbol, reason=result.reason)
-        _save_token(signal, passed=False)
-        return
-
-    rug = await check_token(signal.token_address)
-    if not rug["is_safe"] and rug["score"] != -1:
-        log.info(
-            "rugcheck_fail",
-            symbol=signal.symbol,
-            score=rug["score"],
-            risks=rug["risks"][:3],
-        )
-        _save_token(signal, passed=False)
-        return
-
-    # AI analysis
+    """
+    Called only for tokens that passed the full filter pipeline:
+    Rule Filters → Birdeye security → Rugcheck → Twitter verification
+    """
     analysis = await analyze_token(signal)
+
     if analysis is None:
-        # No API key or error — log candidate without AI score
         log.info(
             "candidate_no_ai",
             symbol=signal.symbol,
             rule_score=signal.rule_score,
             liquidity_sol=round(signal.liquidity_sol, 1),
+            twitter_verified=signal.twitter_verified,
         )
-        _save_token(signal, passed=True)
+        _save_token(signal)
         return
 
     signal.ai_score = analysis["score"]
     signal.final_score = analysis["final_score"]
-    _save_token(signal, passed=True)
+    _save_token(signal)
 
     if analysis["final_score"] < settings.ai_score_threshold:
         log.info(
@@ -71,13 +54,15 @@ async def handle_token(signal: TokenSignal):
         confidence=analysis["confidence"],
         risk=analysis["risk_level"],
         suggested_sol=analysis["suggested_position_sol"],
+        twitter_verified=signal.twitter_verified,
+        twitter_mentions=signal.twitter_mentions_1h,
         reasoning=analysis["reasoning"],
     )
 
     # TODO Phase 3: Trade Executor → execute buy
 
 
-def _save_token(signal: TokenSignal, passed: bool):
+def _save_token(signal: TokenSignal):
     try:
         with get_session() as session:
             if session.get(Token, signal.token_address):
@@ -96,9 +81,9 @@ def _save_token(signal: TokenSignal, passed: bool):
                 buy_count_1h=signal.buy_count_1h,
                 sell_count_1h=signal.sell_count_1h,
                 rule_score=signal.rule_score,
-                ai_score=signal.ai_score if signal.ai_score else None,
-                final_score=signal.final_score if signal.final_score else None,
-                passed_filters=passed,
+                ai_score=signal.ai_score or None,
+                final_score=signal.final_score or None,
+                passed_filters=True,
             ))
             session.commit()
     except Exception as e:
@@ -113,7 +98,6 @@ async def main():
     log.info("bot_starting", mode=mode, poll_interval_sec=POLL_INTERVAL_SEC)
 
     pumpfun_queue: asyncio.Queue = asyncio.Queue()
-
     collector = PumpFunCollector(queue=pumpfun_queue)
     poller = Poller(
         pumpfun_queue=pumpfun_queue,
@@ -122,11 +106,7 @@ async def main():
     )
 
     try:
-        # Run WebSocket collector and 5-min poller concurrently
-        await asyncio.gather(
-            collector.start(),
-            poller.start(),
-        )
+        await asyncio.gather(collector.start(), poller.start())
     except KeyboardInterrupt:
         log.info("bot_stopped")
         await collector.stop()

@@ -63,4 +63,7 @@ class PumpFunCollector:
             market_cap_usd=float(data.get("market_cap", 0) or 0),
             liquidity_sol=float(data.get("virtual_sol_reserves", 0) or 0) / 1e9,
             creator=data.get("creator", ""),
+            twitter_url=data.get("twitter", ""),
+            telegram_url=data.get("telegram", ""),
+            website_url=data.get("website", ""),
         )

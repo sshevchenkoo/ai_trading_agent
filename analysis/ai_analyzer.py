@@ -41,13 +41,16 @@ TOOLS = [
 
 SYSTEM_PROMPT = """You are a Solana meme token trading analyst. Evaluate tokens for short-term potential (2x-10x within hours/days).
 
-You have a tool: search_twitter — use it to check social signals for the token before deciding.
+The token has already passed: rule filters, Birdeye security check, and Rugcheck.
+Twitter profile verification and mention search have also been done — results are in the prompt.
+
+You have a tool: search_twitter — use it ONLY if you need additional Twitter data beyond what's provided.
 
 Analysis steps:
-1. Read the token data provided.
-2. Call search_twitter to check organic interest, KOL activity, and sentiment.
-3. Look for red flags: bots, coordinated shilling, scam keywords.
-4. Make your final decision.
+1. Read all the token data including Twitter verification result and pre-fetched mentions.
+2. If Twitter mentions are missing or you want to search a specific angle, call search_twitter.
+3. Evaluate: organic hype vs bots, narrative strength, timing, red flags.
+4. Return your JSON verdict.
 
 Return ONLY valid JSON at the end. No markdown, no extra text."""
 
@@ -148,7 +151,35 @@ def _build_prompt(signal: TokenSignal, birdeye: dict) -> str:
     else:
         market_section = "- Market data unavailable"
 
-    return f"""Analyze this Solana token. Use search_twitter to check social signals, then return your JSON verdict.
+    # Twitter profile verification section
+    if signal.twitter_url:
+        verified_str = (
+            "✅ YES — contract address confirmed in profile"
+            if signal.twitter_verified
+            else "❌ NO — contract address NOT found in bio/tweets"
+        )
+        twitter_profile = (
+            f"- Token Twitter: @{signal.twitter_username} "
+            f"({signal.twitter_followers:,} followers)\n"
+            f"- Contract verified in profile: {verified_str}"
+        )
+    else:
+        twitter_profile = "- Token has no Twitter linked on pump.fun"
+
+    # Pre-fetched tweets section
+    if signal.tweets:
+        tweet_lines = []
+        for i, t in enumerate(signal.tweets[:15], 1):
+            kol_tag = " [KOL]" if t.is_kol else ""
+            tweet_lines.append(
+                f"  {i}. @{t.author_name}{kol_tag} ({t.author_followers:,} followers) "
+                f"[{t.likes}♥ {t.retweets}🔁]: {t.text[:200]}"
+            )
+        tweets_section = "\n".join(tweet_lines)
+    else:
+        tweets_section = "  No tweets found (Twitter may not be configured or no recent mentions)"
+
+    return f"""Analyze this Solana token. Twitter data is pre-fetched below — only call search_twitter if you need an additional angle not covered. Then return your JSON verdict.
 
 TOKEN:
 - Symbol: ${signal.symbol}
@@ -165,10 +196,16 @@ TOKEN:
 SECURITY & ON-CHAIN (Birdeye):
 {birdeye_section}
 
+TWITTER PROFILE:
+{twitter_profile}
+
+TWITTER MENTIONS (pre-fetched, {len(signal.tweets)} total, sorted by follower count):
+{tweets_section}
+
 MARKET CONTEXT:
 {market_section}
 
-After using search_twitter, respond with this exact JSON:
+Respond with this exact JSON:
 {{
   "score": <integer 1-10, where 7+ means buy>,
   "confidence": <"low" | "medium" | "high">,

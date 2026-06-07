@@ -41,11 +41,18 @@ class TokenSignal:
     creator: str = ""
     creator_rug_count: int = 0      # how many rugs this wallet made before
 
-    # Social signals
+    # Token's own social links (from pump.fun)
+    twitter_url: str = ""
+    telegram_url: str = ""
+    website_url: str = ""
+
+    # Twitter analysis results (filled by twitter.py)
+    twitter_verified: bool = False       # contract address found in token's Twitter
+    twitter_username: str = ""
+    twitter_followers: int = 0
     twitter_mentions_1h: int = 0
     kol_mentions: list = field(default_factory=list)
-    tweet_texts: list = field(default_factory=list)   # legacy plain strings
-    tweets: list[TweetInfo] = field(default_factory=list)  # rich tweet objects
+    tweets: list[TweetInfo] = field(default_factory=list)
 
     # Market context (filled by market_data.py)
     market: MarketContext = field(default_factory=MarketContext)
