@@ -1,0 +1,25 @@
+# Secrets
+.env
+wallet.json
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+dist/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Obsidian (personal notes app)
+.obsidian/
+
+# Poetry cache
+.cache/
