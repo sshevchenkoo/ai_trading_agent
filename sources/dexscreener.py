@@ -10,8 +10,39 @@ log = get_logger("dexscreener")
 BASE_URL = "https://api.dexscreener.com"
 
 
+async def fetch_new_pairs() -> list[TokenSignal]:
+    """Poll DexScreener for the latest Solana token profiles."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f"{BASE_URL}/token-profiles/latest/v1")
+            resp.raise_for_status()
+            items = resp.json()
+
+        signals = []
+        for item in items:
+            if item.get("chainId") != "solana":
+                continue
+            address = item.get("tokenAddress")
+            if not address:
+                continue
+            signals.append(TokenSignal(
+                token_address=address,
+                symbol=item.get("header", "???")[:10],
+                name=item.get("description", "")[:50],
+                description=item.get("description", ""),
+                source="dexscreener",
+            ))
+
+        log.info("dexscreener_polled", count=len(signals))
+        return signals
+
+    except Exception as e:
+        log.error("dexscreener_poll_failed", error=str(e))
+        return []
+
+
 async def enrich_signal(signal: TokenSignal) -> TokenSignal:
-    """Fetch on-chain metrics from DexScreener and fill in the signal."""
+    """Fetch on-chain metrics for a single token and fill in the signal."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
@@ -24,14 +55,10 @@ async def enrich_signal(signal: TokenSignal) -> TokenSignal:
         if not pairs:
             return signal
 
-        # Pick the pair with highest liquidity
         pair = max(pairs, key=lambda p: p.get("liquidity", {}).get("usd", 0))
 
-        liquidity_quote = pair.get("liquidity", {}).get("quote", 0) or 0
-        liquidity_usd = pair.get("liquidity", {}).get("usd", 0) or 0
-        price_usd = float(pair.get("priceUsd", 0) or 0)
+        liquidity_quote = float(pair.get("liquidity", {}).get("quote", 0) or 0)
         market_cap = float(pair.get("marketCap", 0) or 0)
-
         txns_h1 = pair.get("txns", {}).get("h1", {})
         buys = int(txns_h1.get("buys", 0) or 0)
         sells = int(txns_h1.get("sells", 0) or 0)
@@ -40,23 +67,29 @@ async def enrich_signal(signal: TokenSignal) -> TokenSignal:
         age_minutes = 0
         if created_at_ms:
             created = datetime.fromtimestamp(created_at_ms / 1000, tz=timezone.utc)
-            age_minutes = int((datetime.now(tz=timezone.utc) - created).total_seconds() / 60)
+            age_minutes = int(
+                (datetime.now(tz=timezone.utc) - created).total_seconds() / 60
+            )
 
-        signal.liquidity_sol = float(liquidity_quote)
-        signal.market_cap_usd = market_cap or liquidity_usd
+        if pair.get("baseToken", {}).get("symbol"):
+            signal.symbol = pair["baseToken"]["symbol"]
+        if pair.get("baseToken", {}).get("name"):
+            signal.name = pair["baseToken"]["name"]
+
+        signal.liquidity_sol = liquidity_quote
+        signal.market_cap_usd = market_cap
         signal.buy_count_1h = buys
         signal.sell_count_1h = sells
         signal.age_minutes = age_minutes
 
         log.debug(
-            "dexscreener_enriched",
+            "enriched",
             symbol=signal.symbol,
-            liquidity_sol=signal.liquidity_sol,
+            liquidity_sol=round(signal.liquidity_sol, 1),
             age_minutes=age_minutes,
-            buys=buys,
-            sells=sells,
         )
+
     except Exception as e:
-        log.warning("dexscreener_fetch_failed", symbol=signal.symbol, error=str(e))
+        log.warning("enrich_failed", symbol=signal.symbol, error=str(e))
 
     return signal

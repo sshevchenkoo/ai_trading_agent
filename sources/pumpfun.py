@@ -1,7 +1,5 @@
 import asyncio
 import json
-from datetime import datetime
-from typing import Callable, Awaitable
 
 import websockets
 
@@ -13,9 +11,14 @@ log = get_logger("pumpfun")
 PUMPFUN_WS = "wss://pumpportal.fun/api/data"
 
 
-class PumpFunListener:
-    def __init__(self, on_token: Callable[[TokenSignal], Awaitable[None]]):
-        self.on_token = on_token
+class PumpFunCollector:
+    """
+    Listens to pump.fun WebSocket and puts new tokens into a queue.
+    Does NOT process them — the Poller drains the queue every N minutes.
+    """
+
+    def __init__(self, queue: asyncio.Queue):
+        self.queue = queue
         self._running = False
 
     async def start(self):
@@ -26,14 +29,13 @@ class PumpFunListener:
             except Exception as e:
                 log.warning("pumpfun_disconnected", error=str(e))
                 if self._running:
-                    log.info("pumpfun_reconnecting", delay=5)
                     await asyncio.sleep(5)
 
     async def stop(self):
         self._running = False
 
     async def _connect(self):
-        log.info("pumpfun_connecting", url=PUMPFUN_WS)
+        log.info("pumpfun_connecting")
         async with websockets.connect(PUMPFUN_WS) as ws:
             await ws.send(json.dumps({"method": "subscribeNewToken"}))
             log.info("pumpfun_connected")
@@ -44,7 +46,7 @@ class PumpFunListener:
                     data = json.loads(message)
                     signal = self._parse(data)
                     if signal:
-                        await self.on_token(signal)
+                        await self.queue.put(signal)
                 except Exception as e:
                     log.error("pumpfun_parse_error", error=str(e))
 
@@ -52,28 +54,13 @@ class PumpFunListener:
         address = data.get("mint") or data.get("token_address")
         if not address:
             return None
-
-        symbol = data.get("symbol", "???")
-        name = data.get("name", symbol)
-        market_cap = float(data.get("market_cap", 0) or 0)
-        virt_sol = float(data.get("virtual_sol_reserves", 30) or 30)
-
-        log.info(
-            "new_token",
-            symbol=symbol,
-            address=address[:8] + "...",
-            market_cap_usd=market_cap,
-            liquidity_sol=virt_sol,
-        )
-
         return TokenSignal(
             token_address=address,
-            symbol=symbol,
-            name=name,
+            symbol=data.get("symbol", "???"),
+            name=data.get("name", ""),
             description=data.get("description", ""),
             source="pumpfun",
-            liquidity_sol=virt_sol,
-            market_cap_usd=market_cap,
-            age_minutes=0,
+            market_cap_usd=float(data.get("market_cap", 0) or 0),
+            liquidity_sol=float(data.get("virtual_sol_reserves", 0) or 0) / 1e9,
             creator=data.get("creator", ""),
         )
