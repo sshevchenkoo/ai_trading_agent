@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     # AI
     anthropic_api_key: str = ""
 
+    # Birdeye
+    birdeye_api_key: str = ""
+
     # Twitter
     twitter_bearer_token: str = ""
     twitter_api_key: str = ""

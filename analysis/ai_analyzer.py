@@ -3,6 +3,7 @@ import anthropic
 
 from config import settings
 from sources.signal import TokenSignal
+from sources.birdeye import get_token_analysis
 from utils.logger import get_logger
 
 log = get_logger("ai_analyzer")
@@ -39,6 +40,29 @@ def _build_prompt(signal: TokenSignal) -> str:
     if signal.creator_rug_count > 0:
         creator_note = f"\n- ⚠️ Creator previous rug pulls: {signal.creator_rug_count}"
 
+    # Birdeye section
+    birdeye_section = "  not available (no API key)"
+    if hasattr(signal, "_birdeye") and signal._birdeye:
+        b = signal._birdeye
+        lines = []
+        if b.get("is_mintable"):
+            lines.append("  ⚠️ Mint authority NOT revoked (creator can print tokens)")
+        if b.get("is_freezable"):
+            lines.append("  ⚠️ Freeze authority exists (wallets can be frozen)")
+        if b.get("lp_locked_pct"):
+            lines.append(f"  LP locked: {b['lp_locked_pct']:.1f}%")
+        if b.get("creator_pct"):
+            lines.append(f"  Creator holds: {b['creator_pct']:.1f}% of supply")
+        if b.get("top10_holder_pct"):
+            lines.append(f"  Top 10 holders: {b['top10_holder_pct']:.1f}%")
+        if b.get("unique_wallets_24h"):
+            lines.append(f"  Unique wallets 24h: {b['unique_wallets_24h']}")
+        if b.get("price_change_1h"):
+            lines.append(f"  Price change 1h: {b['price_change_1h']:+.1f}%")
+        if b.get("buy_24h") and b.get("sell_24h"):
+            lines.append(f"  Buys/Sells 24h: {b['buy_24h']}/{b['sell_24h']}")
+        birdeye_section = "\n".join(lines) if lines else "  no notable data"
+
     m = signal.market
     if m.sol_price_usd:
         market_section = (
@@ -70,6 +94,9 @@ SOCIAL:
 - Top tweets:
 {tweets_section}
 
+SECURITY & ON-CHAIN (Birdeye):
+{birdeye_section}
+
 MARKET CONTEXT:
 {market_section}
 
@@ -92,6 +119,10 @@ async def analyze_token(signal: TokenSignal) -> dict | None:
         return None
 
     try:
+        # Fetch Birdeye analysis and attach to signal
+        birdeye_data = await get_token_analysis(signal.token_address)
+        signal._birdeye = birdeye_data
+
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
         response = client.messages.create(
