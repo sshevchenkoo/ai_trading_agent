@@ -8,63 +8,138 @@ from utils.logger import get_logger
 
 log = get_logger("ai_analyzer")
 
-SYSTEM_PROMPT = """You are a Solana meme token analyst. Your job is to evaluate tokens for short-term trading potential (2x-10x within hours/days).
+# ─── Tool definitions ────────────────────────────────────────────────────────
 
-Your analysis criteria:
-1. Tweet quality — real organic interest or bots/fake hype?
-2. Narrative strength — does the token have a clear story or meme?
-3. Timing — early hype (good) or already peaked (bad)?
-4. Red flags — scam signs in name, description, creator history
-5. Potential — similarity to past successful tokens
+TOOLS = [
+    {
+        "name": "search_twitter",
+        "description": (
+            "Search Twitter/X for recent tweets about a Solana token. "
+            "Use this to gauge social sentiment, find KOL mentions, detect "
+            "coordinated shilling, or check if hype is organic. "
+            "Call it with the token ticker (e.g. '$BONK2') or a broader query."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Twitter search query, e.g. '$BONK2 solana' or '#BONK2'",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "How many tweets to fetch (10–50). Default 20.",
+                    "default": 20,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+]
 
-Return ONLY valid JSON. No markdown, no extra text, no explanation outside JSON."""
+# ─── System prompt ────────────────────────────────────────────────────────────
+
+SYSTEM_PROMPT = """You are a Solana meme token trading analyst. Evaluate tokens for short-term potential (2x-10x within hours/days).
+
+You have a tool: search_twitter — use it to check social signals for the token before deciding.
+
+Analysis steps:
+1. Read the token data provided.
+2. Call search_twitter to check organic interest, KOL activity, and sentiment.
+3. Look for red flags: bots, coordinated shilling, scam keywords.
+4. Make your final decision.
+
+Return ONLY valid JSON at the end. No markdown, no extra text."""
+
+# ─── Tool execution ───────────────────────────────────────────────────────────
+
+async def _execute_tool(name: str, inputs: dict) -> str:
+    if name == "search_twitter":
+        return await _twitter_search(inputs["query"], inputs.get("max_results", 20))
+    return json.dumps({"error": f"unknown tool: {name}"})
 
 
-def _build_prompt(signal: TokenSignal) -> str:
-    # Rich tweets with author info
-    if signal.tweets:
-        tweets_section = "\n".join(
-            f"  - [{t.author_name}, {t.author_followers:,} followers"
-            f"{', KOL' if t.is_kol else ''}] "
-            f"{t.likes}L {t.retweets}RT — {t.text[:180]}"
-            for t in signal.tweets[:5]
+async def _twitter_search(query: str, max_results: int) -> str:
+    if not settings.twitter_bearer_token:
+        return json.dumps({
+            "error": "Twitter API not configured (TWITTER_BEARER_TOKEN not set)",
+            "tweets": [],
+        })
+
+    try:
+        import tweepy
+
+        client = tweepy.Client(
+            bearer_token=settings.twitter_bearer_token,
+            wait_on_rate_limit=False,
         )
-    elif signal.tweet_texts:
-        tweets_section = "\n".join(f"  - {t[:200]}" for t in signal.tweet_texts[:5])
-    else:
-        tweets_section = "  none"
+        safe_query = f"{query} lang:en -is:retweet"
+        response = client.search_recent_tweets(
+            query=safe_query,
+            max_results=min(max(max_results, 10), 50),
+            tweet_fields=["text", "public_metrics", "author_id", "created_at"],
+            expansions=["author_id"],
+            user_fields=["username", "public_metrics"],
+        )
 
-    kol_section = ", ".join(signal.kol_mentions) if signal.kol_mentions else "none"
+        users = {}
+        if response.includes and response.includes.get("users"):
+            for u in response.includes["users"]:
+                users[u.id] = {
+                    "username": u.username,
+                    "followers": u.public_metrics["followers_count"],
+                }
 
+        tweets = []
+        for tweet in response.data or []:
+            author = users.get(tweet.author_id, {})
+            tweets.append({
+                "text": tweet.text[:280],
+                "author": author.get("username", "unknown"),
+                "followers": author.get("followers", 0),
+                "likes": tweet.public_metrics["like_count"],
+                "retweets": tweet.public_metrics["retweet_count"],
+            })
+
+        log.info("twitter_tool_called", query=query, results=len(tweets))
+        return json.dumps({"tweets": tweets, "total": len(tweets)})
+
+    except Exception as e:
+        log.warning("twitter_tool_failed", query=query, error=str(e))
+        return json.dumps({"error": str(e), "tweets": []})
+
+
+# ─── Prompt builder ───────────────────────────────────────────────────────────
+
+def _build_prompt(signal: TokenSignal, birdeye: dict) -> str:
     creator_note = ""
     if signal.creator_rug_count > 0:
         creator_note = f"\n- ⚠️ Creator previous rug pulls: {signal.creator_rug_count}"
 
     # Birdeye section
-    birdeye_section = "  not available (no API key)"
-    if hasattr(signal, "_birdeye") and signal._birdeye:
-        b = signal._birdeye
-        lines = []
-        if b.get("is_mintable"):
-            lines.append("  ⚠️ Mint authority NOT revoked (creator can print tokens)")
-        if b.get("is_freezable"):
-            lines.append("  ⚠️ Freeze authority exists (wallets can be frozen)")
-        if b.get("lp_locked_pct"):
-            lines.append(f"  LP locked: {b['lp_locked_pct']:.1f}%")
-        if b.get("creator_pct"):
-            lines.append(f"  Creator holds: {b['creator_pct']:.1f}% of supply")
-        if b.get("top10_holder_pct"):
-            lines.append(f"  Top 10 holders: {b['top10_holder_pct']:.1f}%")
-        if b.get("unique_wallets_24h"):
-            lines.append(f"  Unique wallets 24h: {b['unique_wallets_24h']}")
-        if b.get("price_change_1h"):
-            lines.append(f"  Price change 1h: {b['price_change_1h']:+.1f}%")
-        if b.get("buy_24h") and b.get("sell_24h"):
-            lines.append(f"  Buys/Sells 24h: {b['buy_24h']}/{b['sell_24h']}")
-        birdeye_section = "\n".join(lines) if lines else "  no notable data"
+    birdeye_lines = []
+    if birdeye:
+        if birdeye.get("is_mintable"):
+            birdeye_lines.append("  ⚠️ Mint authority NOT revoked")
+        if birdeye.get("is_freezable"):
+            birdeye_lines.append("  ⚠️ Freeze authority exists")
+        if birdeye.get("lp_locked_pct"):
+            birdeye_lines.append(f"  LP locked: {birdeye['lp_locked_pct']:.1f}%")
+        if birdeye.get("creator_pct"):
+            birdeye_lines.append(f"  Creator holds: {birdeye['creator_pct']:.1f}%")
+        if birdeye.get("top10_holder_pct"):
+            birdeye_lines.append(f"  Top 10 holders: {birdeye['top10_holder_pct']:.1f}%")
+        if birdeye.get("unique_wallets_24h"):
+            birdeye_lines.append(f"  Unique wallets 24h: {birdeye['unique_wallets_24h']}")
+        if birdeye.get("price_change_1h"):
+            birdeye_lines.append(f"  Price change 1h: {birdeye['price_change_1h']:+.1f}%")
+        if birdeye.get("buy_24h") and birdeye.get("sell_24h"):
+            birdeye_lines.append(f"  Buys/Sells 24h: {birdeye['buy_24h']}/{birdeye['sell_24h']}")
+    birdeye_section = "\n".join(birdeye_lines) if birdeye_lines else "  not available"
 
+    # Market section
     m = signal.market
-    if m.sol_price_usd:
+    if m and m.sol_price_usd:
         market_section = (
             f"- SOL price: ${m.sol_price_usd:,.2f} ({m.sol_change_24h_pct:+.1f}% 24h)\n"
             f"- BTC trend: {m.btc_change_24h_pct:+.1f}% 24h\n"
@@ -73,7 +148,7 @@ def _build_prompt(signal: TokenSignal) -> str:
     else:
         market_section = "- Market data unavailable"
 
-    return f"""Analyze this Solana token for short-term trading potential:
+    return f"""Analyze this Solana token. Use search_twitter to check social signals, then return your JSON verdict.
 
 TOKEN:
 - Symbol: ${signal.symbol}
@@ -86,13 +161,6 @@ TOKEN:
 - Top 10 holders: {signal.top10_holder_pct:.1f}% of supply
 - Dev wallet sold: {signal.dev_wallet_sold}{creator_note}
 - Buy/Sell ratio (1h): {signal.buy_count_1h}/{signal.sell_count_1h}
-- Source: {signal.source}
-
-SOCIAL:
-- Twitter mentions (1h): {signal.twitter_mentions_1h}
-- KOL mentions: {kol_section}
-- Top tweets:
-{tweets_section}
 
 SECURITY & ON-CHAIN (Birdeye):
 {birdeye_section}
@@ -100,7 +168,7 @@ SECURITY & ON-CHAIN (Birdeye):
 MARKET CONTEXT:
 {market_section}
 
-Respond with this exact JSON:
+After using search_twitter, respond with this exact JSON:
 {{
   "score": <integer 1-10, where 7+ means buy>,
   "confidence": <"low" | "medium" | "high">,
@@ -113,29 +181,65 @@ Respond with this exact JSON:
 }}"""
 
 
+# ─── Main entry point ─────────────────────────────────────────────────────────
+
 async def analyze_token(signal: TokenSignal) -> dict | None:
     if not settings.anthropic_api_key:
         log.warning("ai_analyzer_skipped", reason="ANTHROPIC_API_KEY not set")
         return None
 
     try:
-        # Fetch Birdeye analysis and attach to signal
         birdeye_data = await get_token_analysis(signal.token_address)
-        signal._birdeye = birdeye_data
 
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        messages = [{"role": "user", "content": _build_prompt(signal, birdeye_data)}]
 
-        response = client.messages.create(
-            model="claude-opus-4-8",
-            max_tokens=512,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": _build_prompt(signal)}],
-        )
+        # ── Tool use loop ──────────────────────────────────────────────────
+        tool_calls = 0
+        while True:
+            response = client.messages.create(
+                model="claude-opus-4-8",
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=messages,
+            )
 
-        raw = response.content[0].text.strip()
+            if response.stop_reason == "tool_use":
+                # Claude wants to call a tool — execute it and continue
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        tool_calls += 1
+                        log.info(
+                            "claude_tool_call",
+                            tool=block.name,
+                            inputs=block.input,
+                            symbol=signal.symbol,
+                        )
+                        result = await _execute_tool(block.name, block.input)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": tool_results})
+
+            elif response.stop_reason == "end_turn":
+                # Claude is done — extract JSON from the last text block
+                raw = next(
+                    (b.text for b in response.content if hasattr(b, "text")), ""
+                ).strip()
+                break
+
+            else:
+                log.error("unexpected_stop_reason", reason=response.stop_reason)
+                return None
+
+        # ── Parse result ───────────────────────────────────────────────────
         result = json.loads(raw)
-
-        # Final score: 40% rule filters + 60% AI
         final_score = round(signal.rule_score * 0.4 + result["score"] * 0.6, 2)
         result["final_score"] = final_score
 
@@ -146,13 +250,13 @@ async def analyze_token(signal: TokenSignal) -> dict | None:
             final_score=final_score,
             confidence=result["confidence"],
             risk=result["risk_level"],
+            tool_calls=tool_calls,
             reasoning=result["reasoning"][:80] + "...",
         )
-
         return result
 
     except json.JSONDecodeError as e:
-        log.error("ai_bad_json", symbol=signal.symbol, error=str(e), raw=raw[:200])
+        log.error("ai_bad_json", symbol=signal.symbol, error=str(e))
         return None
     except Exception as e:
         log.error("ai_analyzer_failed", symbol=signal.symbol, error=str(e))
