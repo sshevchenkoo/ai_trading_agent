@@ -16,8 +16,8 @@ POLL_INTERVAL_SEC = 300  # 5 minutes
 
 async def handle_token(signal: TokenSignal):
     """
-    Called only for tokens that passed the full filter pipeline:
-    Rule Filters → Birdeye security → Rugcheck → Twitter verification
+    Called for tokens that passed the mcap > $5k filter.
+    Claude AI investigates using tools (DexScreener, Birdeye, GMGN, Twitter) and decides.
     """
     analysis = await analyze_token(signal)
 
@@ -25,9 +25,8 @@ async def handle_token(signal: TokenSignal):
         log.info(
             "candidate_no_ai",
             symbol=signal.symbol,
-            rule_score=signal.rule_score,
+            market_cap_usd=round(signal.market_cap_usd),
             liquidity_sol=round(signal.liquidity_sol, 1),
-            twitter_verified=signal.twitter_verified,
         )
         _save_token(signal)
         return
@@ -40,7 +39,7 @@ async def handle_token(signal: TokenSignal):
         log.info(
             "ai_score_too_low",
             symbol=signal.symbol,
-            final_score=analysis["final_score"],
+            score=analysis["final_score"],
             threshold=settings.ai_score_threshold,
         )
         return
@@ -48,14 +47,12 @@ async def handle_token(signal: TokenSignal):
     log.info(
         "BUY_SIGNAL",
         symbol=signal.symbol,
-        final_score=analysis["final_score"],
-        ai_score=analysis["score"],
-        rule_score=signal.rule_score,
+        score=analysis["final_score"],
         confidence=analysis["confidence"],
         risk=analysis["risk_level"],
         suggested_sol=analysis["suggested_position_sol"],
-        twitter_verified=signal.twitter_verified,
-        twitter_mentions=signal.twitter_mentions_1h,
+        narrative_strength=analysis.get("narrative_strength"),
+        timeframe=analysis.get("estimated_timeframe"),
         reasoning=analysis["reasoning"],
     )
 
