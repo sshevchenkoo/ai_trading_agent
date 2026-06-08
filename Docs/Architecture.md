@@ -1,125 +1,133 @@
-# Архитектура системы
+# Архітектура системи
 
-## Общая схема потока данных
+## Загальна схема потоку даних
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    DATA LAYER                           │
 │                                                         │
-│  [pump.fun WS] ──┐                                      │
-│  [DexScreener]  ──┼──► [Signal Aggregator]              │
-│  [Twitter API]  ──┘           │                         │
-└───────────────────────────────┼─────────────────────────┘
+│  [pump.fun WS] ──┐  WebSocket, пасивний, завжди живий  │
+│  [DexScreener]  ──┼──► [asyncio.Queue]  (нові токени)  │
+│                  └──► збирає кожні 5 хв                │
+└───────────────────────────────┬─────────────────────────┘
+                                │
+                     кожні 5 хвилин (Poller)
+                                │
+                    ┌───────────▼───────────┐
+                    │  DexScreener enrich   │
+                    │  (real mcap/liquidity)│
+                    └───────────┬───────────┘
+                                │
+                    ┌───────────▼───────────┐
+                    │  mcap > $5,000?       │
+                    │  NO → discard         │
+                    └───────────┬───────────┘
+                                │ YES
+                                ▼
+┌─────────────────────────────────────────────────────────┐
+│              ANALYSIS LAYER (3 стадії)                  │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │ Стадія 1: Python pre-filter  (без Claude)        │  │
+│  │  DexScreener ──┐  паралельно                     │  │
+│  │  Birdeye ──────┘                                 │  │
+│  │  Hard reject: нема обʼєму / security flags       │  │
+│  │  ~90% токенів зупиняється тут (0 Claude calls)   │  │
+│  └──────────────────────────┬───────────────────────┘  │
+│                             │ ~10% пройшло              │
+│  ┌──────────────────────────▼───────────────────────┐  │
+│  │ Стадія 2: Specialist agents (Haiku, паралельно)  │  │
+│  │  [Twitter Haiku] ──┐                             │  │
+│  │  [GMGN Haiku]   ───┘ asyncio.gather()            │  │
+│  └──────────────────────────┬───────────────────────┘  │
+│                             │                           │
+│  ┌──────────────────────────▼───────────────────────┐  │
+│  │ Стадія 3: Master agent (Opus)                    │  │
+│  │  Отримує: DexScreener + Birdeye + Twitter + GMGN │  │
+│  │  Повертає: score 1-10 + вердикт                  │  │
+│  └──────────────────────────┬───────────────────────┘  │
+│                             │                           │
+│                    score ≥ 7.0?                         │
+│                   NO → discard   YES → BUY_SIGNAL       │
+└─────────────────────────────────────────────────────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────┐
-│                  ANALYSIS LAYER                         │
+│                  TRADING LAYER (Phase 3)                │
 │                                                         │
-│              [Rule Filters] ──► [AI Analyzer]           │
-│               (быстро, дёшево)  (Claude API)            │
-│                                      │                  │
-└──────────────────────────────────────┼──────────────────┘
-                                       │
-                              score ≥ threshold?
-                                       │
-                    NO ─── discard     YES ──► proceed
-                                       │
-┌──────────────────────────────────────┼──────────────────┐
-│                  TRADING LAYER       ▼                  │
-│                                                         │
-│              [Trade Executor] ──► [Solana Wallet]       │
-│                    │              (Jupiter swap)        │
-│                    │                                    │
-│              [Position Manager]                         │
-│                    │                                    │
-│         ┌──────────┼──────────┐                        │
-│         ▼          ▼          ▼                        │
-│      [+100%]    [+300%]    [+900%]   [-50%]            │
-│      sell 50%  sell 25%  sell rest  stop-loss          │
+│          [Trade Executor] ──► [Solana Wallet]           │
+│                │              (Jupiter swap)            │
+│                │                                        │
+│          [Position Manager]                             │
+│                │                                        │
+│     ┌──────────┼──────────┐                             │
+│     ▼          ▼          ▼                             │
+│  [+100%]    [+300%]    [+900%]   [-50%]                 │
+│  sell 50%  sell 25%  sell rest  stop-loss               │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Компоненты и их роли
+## Компоненти і їх ролі
 
-### Signal Aggregator
-Центральная шина. Получает события от всех источников данных, нормализует их в единый формат `TokenSignal`, дедуплицирует (один токен может прийти из нескольких источников).
+### Poller
+Кожні 5 хвилин: дренує чергу pump.fun + запитує DexScreener нові пари. Дедублікує токени, збагачує реальними метриками (mcap, liquidity), відсіює mcap < $5k.
 
-```
-TokenSignal {
-  token_address: str
-  symbol: str
-  source: "pumpfun" | "dexscreener" | "twitter"
-  triggered_at: timestamp
-  
-  # метрики токена
-  liquidity_sol: float
-  market_cap_usd: float
-  holder_count: int
-  top10_holder_pct: float
-  dev_wallet_sold: bool
-  age_minutes: int
-  
-  # социальные сигналы
-  twitter_mentions_1h: int
-  kol_mentions: list[str]
-  tweet_texts: list[str]
-  
-  # расчётный скор
-  rule_score: float   # от фильтров
-  ai_score: float     # от Claude
-  final_score: float  # итог
-}
-```
+### Python pre-filter (Стадія 1)
+Детерміновані перевірки — без AI. Паралельно запитує DexScreener і Birdeye, застосовує hard rules. ~90% токенів відхиляються тут без жодного Claude виклику.
 
-### Rule Filters (быстрые фильтры)
-Первая линия защиты — дешёвые проверки без AI, отсеивают ~80% токенов за миллисекунды.
+### Specialist agents (Стадія 2)
+Два Haiku агенти запускаються паралельно:
+- **Twitter агент** — sentiment, KOL mentions, органічний нарратив
+- **GMGN агент** — smart money, поведінка dev'а, rug risk
 
-### AI Analyzer
-Вызывается только для токенов, прошедших фильтры. Claude анализирует твиты, оценивает контекст, возвращает скор и reasoning.
+### Master agent (Стадія 3)
+Opus отримує всі 4 звіти (DexScreener + Birdeye з pre-filter + Twitter + GMGN від спеціалістів) і приймає фінальний вердикт.
 
-### Trade Executor
-Вызывает Jupiter API для получения котировки и исполнения свопа. Подписывает транзакцию ключом кошелька.
+### Trade Executor (Phase 3)
+Викликає Jupiter API для отримання котировки і виконання свопу. Підписує транзакцію ключем гаманця.
 
-### Position Manager
-Хранит все открытые позиции. Каждые N секунд запрашивает текущую цену и проверяет триггеры продажи.
+### Position Manager (Phase 3)
+Зберігає всі відкриті позиції. Кожні N секунд запитує поточну ціну і перевіряє тригери продажу.
 
 ---
 
-## Взаимодействие в реальном времени
+## Взаємодія в реальному часі
 
 ```
-t=0ms   pump.fun WS → новый токен создан
-t=5ms   Signal Aggregator получает событие
-t=10ms  Rule Filters → быстрая проверка (pass/fail)
-t=15ms  Twitter API → ищем упоминания за последний час
-t=500ms AI Analyzer → Claude API вызов
-t=1500ms final_score рассчитан
-t=1501ms если score ≥ 7.0 → Trade Executor
-t=2000ms транзакция отправлена на Solana
-t=2500ms подтверждение, Position Manager добавляет позицию
+t=0ms     pump.fun WS → новий токен створений → в чергу
+t=0ms     ...накопичуємо 5 хвилин...
+t=300000ms Poller прокидається
+t=300010ms drain черги + DexScreener нові пари
+t=300050ms enrich всіх токенів (паралельно)
+t=300200ms mcap < $5k → discard більшість
+t=300210ms Stage 1: DexScreener + Birdeye паралельно (~90% reject)
+t=300600ms Stage 2: Twitter + GMGN Haiku паралельно
+t=301200ms Stage 3: Opus master вердикт
+t=301201ms score ≥ 7.0 → BUY_SIGNAL
+t=301300ms (Phase 3) Trade Executor → Jupiter swap
+t=302000ms транзакція підтверджена, Position Manager додає позицію
 ```
 
 ---
 
-## Хранение данных
+## Зберігання даних
 
 ```
-SQLite / PostgreSQL:
-├── tokens          — все виденные токены и их метрики
-├── signals         — все сигналы от источников
-├── positions       — открытые и закрытые позиции
-├── trades          — история всех сделок (buy/sell)
-└── ai_analyses     — ответы Claude (для аудита и обучения)
+SQLite:
+├── tokens    — всі побачені токени і їх метрики
+├── signals   — всі сигнали від джерел
+├── positions — відкриті і закриті позиції
+├── trades    — історія всіх угод (buy/sell)
 ```
 
 ---
 
-## Ссылки
+## Посилання
 
-- [[Components/Data Sources]] — детали по каждому источнику
-- [[Components/AI Analyzer]] — промпты и логика анализа
-- [[Components/Trade Executor]] — Jupiter интеграция
-- [[Components/Position Manager]] — логика выходов
-- [[Strategy/Filters and Security]] — правила фильтров
+- [[Components/Data Sources]] — деталі по кожному джерелу
+- [[Components/AI Analyzer]] — мультиагентний аналіз
+- [[Components/Trade Executor]] — Jupiter інтеграція
+- [[Components/Position Manager]] — логіка виходів
+- [[Strategy/Filters and Security]] — Python pre-filter правила

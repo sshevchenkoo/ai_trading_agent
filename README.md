@@ -1,55 +1,62 @@
 # Solana AI Trading Agent
 
-Автоматический бот для торговли meme-токенами на Solana.
+Автоматичний бот для торгівлі meme-токенами на Solana.
 
-Мониторит **pump.fun**, **DexScreener** и **Twitter** каждые 5 минут, анализирует токены с помощью **Claude AI** (с данными Birdeye + CoinGecko), исполняет сделки через **Jupiter**.
+Моніторить **pump.fun** і **DexScreener** кожні 5 хвилин, фільтрує токени через **Python pre-filter** (DexScreener + Birdeye), потім використовує **мультиагентний Claude AI** (Twitter + GMGN спеціалісти + Opus майстер) для прийняття рішення. Виконує угоди через **Jupiter** (Phase 3).
 
 ---
 
-## Как это работает
+## Як це працює
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  pump.fun WebSocket (пассивный, всегда жив)          │
-│  → складывает новые токены в очередь                 │
+│  pump.fun WebSocket (пасивний, завжди живий)         │
+│  → складає нові токени в чергу                      │
 └──────────────────────┬──────────────────────────────┘
                        │
-              каждые 5 минут
+              кожні 5 хвилин
                        ▼
 ┌─────────────────────────────────────────────────────┐
-│                 POLLER CYCLE                        │
+│              POLLER CYCLE                           │
 │                                                     │
-│  Параллельно:                                       │
-│  ├── Забирает токены из очереди pump.fun            │
-│  ├── DexScreener → новые пары на Solana             │
-│  ├── Twitter → упоминания от KOL-аккаунтов          │
-│  └── CoinGecko → цена SOL/BTC, тренд рынка         │
+│  Drain черги pump.fun + DexScreener нові пари       │
+│  → DexScreener enrich (real mcap/liquidity)         │
+│  → mcap < $5,000 → discard                         │
 │                                                     │
-│  Для каждого нового токена:                         │
-│  ├── DexScreener → ликвидность, объём, возраст      │
-│  ├── Birdeye     → безопасность, холдеры, топ трейд.│
-│  ├── Rule Filters → отсеять ~90% (быстро, бесплатно)│
-│  ├── Rugcheck    → проверка контракта               │
-│  └── Claude AI   → score 1-10 + решение             │
-│                          │                          │
-│              final_score ≥ 7.0?                     │
+│  STAGE 1 — Python pre-filter (без Claude):          │
+│  ├── DexScreener: buys_1h < 5 → discard            │
+│  ├── DexScreener: volume_1h < $500 → discard       │
+│  ├── Birdeye: mint/freeze authority → discard       │
+│  ├── Birdeye: creator >20% → discard               │
+│  └── Birdeye: top10 >70% → discard                 │
+│  (~90% токенів зупиняється тут, 0 Claude calls)     │
+│                                                     │
+│  STAGE 2 — Specialist agents (Haiku, паралельно):   │
+│  ├── Twitter agent → sentiment, KOLs, narrative    │
+│  └── GMGN agent → smart money, dev behavior        │
+│                                                     │
+│  STAGE 3 — Master agent (Opus):                     │
+│  Отримує: DexScreener + Birdeye + Twitter + GMGN   │
+│  Повертає: score 1-10                               │
+│                                                     │
+│              score ≥ 7.0?                           │
 │              YES → BUY_SIGNAL                       │
-│              (Phase 3: реальная сделка)             │
+│              (Phase 3: реальна угода)               │
 └─────────────────────────────────────────────────────┘
 ```
 
-**Стратегия выхода:** x2 → продать 50% | x4 → продать 25% | x10 → продать всё | -50% стоп-лосс
+**Стратегія виходу:** x2 → продати 50% | x4 → продати 25% | x10 → продати все | -50% стоп-лосс
 
 ---
 
-## Быстрый старт
+## Швидкий старт
 
-### Требования
+### Вимоги
 
 - Python 3.11+
 - [Poetry](https://python-poetry.org/docs/#installation)
 
-### Установка
+### Встановлення
 
 ```bash
 git clone https://github.com/sshevchenkoo/ai_trading_agent.git
@@ -58,148 +65,143 @@ poetry install
 cp .env.example .env
 ```
 
-### Конфигурация
+### Конфігурація
 
-Открой `.env` и заполни нужные ключи:
+Відкрий `.env` і заповни потрібні ключі:
 
 ```bash
-# Обязательно для Phase 1 — мониторинг токенов
+# Обовʼязково для Phase 1 — моніторинг токенів
 SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
 
-# Обязательно для Phase 2 — AI анализ
+# Обовʼязково для Phase 2 — AI аналіз
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Рекомендуется — безопасность и on-chain данные (бесплатный план)
+# Рекомендується — security і on-chain дані (безкоштовний план)
 BIRDEYE_API_KEY=...
 
-# Опционально — Twitter KOL сигналы
+# Опціонально — Twitter KOL сигнали
 TWITTER_BEARER_TOKEN=...
 
-# Обязательно для Phase 3 — реальные сделки
+# Обовʼязково для Phase 3 — реальні угоди
 WALLET_PRIVATE_KEY=your_base58_private_key_here
 ```
 
-> ⚠️ Никогда не коммить `.env` и `wallet.json` — они в `.gitignore`
+> ⚠️ Ніколи не комміть `.env` і `wallet.json` — вони в `.gitignore`
 
 ### Запуск
 
 ```bash
-# Paper trading (без реальных сделок, по умолчанию)
+# Paper trading (без реальних угод, за замовчуванням)
 poetry run python main.py
 
-# Боевой режим (только после проверки на paper trading!)
+# Бойовий режим (тільки після перевірки на paper trading!)
 PAPER_TRADING=false poetry run python main.py
 ```
 
 ---
 
-## Что видит Claude при анализе
+## Мультиагентний аналіз
 
-Каждый токен прошедший фильтры отправляется Claude со всеми данными:
+Кожен токен що пройшов pre-filter аналізується трьома агентами:
 
 ```
-TOKEN:
-- Symbol: $BONK2 | Age: 3 min | Market Cap: $85,000
-- Liquidity: 134 SOL | Dev wallet sold: False
-- Buy/Sell ratio (1h): 300/45
+Twitter Haiku:     знаходить KOLів, оцінює органічність хайпу
+                   якщо назва схожа на меми → шукає нарратив до токена
+GMGN Haiku:        smart money holders, поведінка dev'а, rug risk
 
-SOCIAL:
-- Twitter mentions (1h): 12
-- [cryptoKing, 820,000 followers, KOL] 340L 89RT — $BONK2 early gem!
-
-SECURITY & ON-CHAIN (Birdeye):
-- LP locked: 85% | Creator holds: 2.1%
-- Top 10 holders: 31.4% | Unique wallets 24h: 423
-- Price change 1h: +34.2% | Buys/Sells 24h: 890/210
-
-MARKET CONTEXT:
-- SOL price: $185.40 (+4.2% 24h) | Market mood: bullish
+Opus master:       отримує всі 4 звіти → фінальний вердикт
 ```
 
-Claude возвращает `score 1-10`. Итоговый `final_score = rule_score×0.4 + ai_score×0.6`.
+**Приклад BUY сигналу в логах:**
+```
+BUY_SIGNAL  symbol=BARRONDOG  score=8.7  confidence=high
+            risk=medium  suggested_sol=0.2  timeframe=hours
+            reasoning="Pre-existing Twitter hype around 'barron trump dog',
+                       12 smart money wallets holding, clean security,
+                       buy/sell ratio 4.2x in last hour"
+```
 
 ---
 
-## Настройки стратегии (.env)
+## Налаштування стратегії (.env)
 
-| Переменная | По умолчанию | Описание |
-|------------|-------------|----------|
-| `MIN_LIQUIDITY_SOL` | 50 | Минимальная ликвидность токена |
-| `AI_SCORE_THRESHOLD` | 7.0 | Минимальный score для покупки |
-| `MAX_POSITION_SIZE_SOL` | 0.2 | Максимум SOL на одну позицию |
-| `MAX_OPEN_POSITIONS` | 5 | Максимум одновременных позиций |
-| `STOP_LOSS_PCT` | 50 | Стоп-лосс в % |
-| `PAPER_TRADING` | true | Режим без реальных сделок |
+| Змінна | За замовчуванням | Опис |
+|--------|-----------------|------|
+| `AI_SCORE_THRESHOLD` | 7.0 | Мінімальний score для покупки |
+| `MAX_POSITION_SIZE_SOL` | 0.2 | Максимум SOL на одну позицію |
+| `MAX_OPEN_POSITIONS` | 5 | Максимум одночасних позицій |
+| `STOP_LOSS_PCT` | 50 | Стоп-лосс у % |
+| `PAPER_TRADING` | true | Режим без реальних угод |
 
 ---
 
-## Структура проекта
+## Структура проекту
 
 ```
-├── main.py                  # Точка входа, оркестратор
-├── config.py                # Все настройки из .env
+├── main.py                  # Точка входу, оркестратор
+├── config.py                # Всі налаштування з .env
 │
 ├── sources/
-│   ├── signal.py            # Модели TokenSignal, TweetInfo, MarketContext
-│   ├── pumpfun.py           # WebSocket — собирает токены в очередь
-│   ├── poller.py            # Планировщик — запускает цикл каждые 5 мин
-│   ├── dexscreener.py       # Новые пары + обогащение метриками
-│   ├── birdeye.py           # Security, holders, on-chain данные
-│   ├── twitter.py           # KOL упоминания токенов
-│   └── market_data.py       # Цена SOL/BTC, тренд рынка (CoinGecko)
+│   ├── signal.py            # Моделі TokenSignal, TweetInfo, MarketContext
+│   ├── pumpfun.py           # WebSocket — збирає токени в чергу
+│   ├── poller.py            # Планувальник — запускає цикл кожні 5 хв + mcap фільтр
+│   ├── dexscreener.py       # Нові пари + збагачення метриками
+│   ├── birdeye.py           # Security, holders, on-chain дані
+│   ├── twitter.py           # Пошук згадок токена в Twitter
+│   └── market_data.py       # Ціна SOL/BTC, тренд ринку (CoinGecko)
 │
 ├── analysis/
-│   ├── filters.py           # Rule-based фильтры (быстро, без API)
-│   ├── rugcheck.py          # Проверка контракта через rugcheck.xyz
-│   └── ai_analyzer.py       # Claude API — финальное решение
+│   ├── filters.py           # (legacy) Rule-based фільтри
+│   ├── rugcheck.py          # (legacy) Перевірка контракту через rugcheck.xyz
+│   └── ai_analyzer.py       # Мультиагентний аналіз: pre-filter + Haiku x2 + Opus
 │
-├── trading/                 # Phase 3 (в разработке)
+├── trading/                 # Phase 3 (в розробці)
 │   ├── wallet.py            # Solana wallet
 │   ├── jupiter.py           # Jupiter swap API
 │   └── executor.py          # Trade Executor
 │
-├── positions/               # Phase 3 (в разработке)
-│   ├── manager.py           # Управление позициями
-│   └── monitor.py           # Мониторинг цен каждые 10 сек
+├── positions/               # Phase 3 (в розробці)
+│   ├── manager.py           # Управління позиціями
+│   └── monitor.py           # Моніторинг цін кожні 10 сек
 │
 ├── db/
-│   ├── models.py            # Token, Signal, Trade, Position таблицы
-│   └── database.py          # SQLite подключение
+│   ├── models.py            # Token, Signal, Trade, Position таблиці
+│   └── database.py          # SQLite підключення
 │
 └── utils/
-    └── logger.py            # Structlog структурированные логи
+    └── logger.py            # Structlog структуровані логи
 ```
 
 ---
 
-## Внешние API
+## Зовнішні API
 
-| Сервис | Зачем | Стоимость |
-|--------|-------|-----------|
-| [Anthropic](https://console.anthropic.com) | Claude AI анализ | ~$3-10/день |
-| [Birdeye](https://birdeye.so) | Security + on-chain данные | Бесплатный план |
-| CoinGecko | Цена SOL/BTC, рыночный тренд | Бесплатно |
-| Rugcheck | Проверка контрактов | Бесплатно |
-| DexScreener | Ликвидность, объём, пары | Бесплатно |
-| pump.fun WS | Новые токены в реальном времени | Бесплатно |
-| [Helius RPC](https://helius.dev) | Надёжный Solana RPC (Phase 3) | $49+/мес |
-| [Twitter/X API](https://developer.twitter.com) | KOL мониторинг | $100/мес |
+| Сервіс | Навіщо | Вартість |
+|--------|--------|----------|
+| [Anthropic](https://console.anthropic.com) | Claude AI (Haiku спеціалісти + Opus майстер) | ~$0.50-2/день |
+| [Birdeye](https://birdeye.so) | Security + on-chain дані | Безкоштовний план |
+| CoinGecko | Ціна SOL/BTC, ринковий тренд | Безкоштовно |
+| DexScreener | Ліквідність, обʼєм, пари | Безкоштовно |
+| [GMGN](https://gmgn.ai) | Smart money, dev behavior | Безкоштовно (public API) |
+| pump.fun WS | Нові токени в реальному часі | Безкоштовно |
+| [Helius RPC](https://helius.dev) | Надійний Solana RPC (Phase 3) | $49+/міс |
+| [Twitter/X API](https://developer.twitter.com) | KOL моніторинг | $100/міс |
 
-**Минимальный бюджет для старта (Phase 1-2):** ~$10/мес (только Anthropic API)
+**Мінімальний бюджет для старту (Phase 1-2):** ~$5/міс (тільки Anthropic API)
 
 ---
 
 ## Roadmap
 
-- [x] **Phase 1** — pump.fun WebSocket + DexScreener + Rule Filters + Rugcheck + SQLite
-- [x] **Phase 2** — Claude AI анализ + Birdeye on-chain data + CoinGecko market context + Twitter KOL
-- [ ] **Phase 3** — Jupiter swap + Solana wallet + Position Manager + автоматические продажи
-- [ ] **Phase 4** — Trailing Stop, Telegram алерты, оптимизация промптов
-- [ ] **Phase 5** — Birdeye smart money tracking, whale wallets, масштабирование
+- [x] **Phase 1** — pump.fun WebSocket + DexScreener + SQLite + structlog
+- [x] **Phase 2** — Мультиагентний Claude AI + Birdeye + GMGN + Twitter + Python pre-filter
+- [ ] **Phase 3** — Jupiter swap + Solana wallet + Position Manager + автоматичні продажі
+- [ ] **Phase 4** — Trailing Stop, Telegram алерти, оптимізація промптів
+- [ ] **Phase 5** — Whale tracking, масштабування
 
 ---
 
-## Важно
+## Важливо
 
-Это экспериментальный проект. Торговля meme-токенами крайне рискованна.
-Всегда начинай с `PAPER_TRADING=true` и никогда не торгуй деньгами которые не готов потерять.
+Це експериментальний проект. Торгівля meme-токенами надзвичайно ризикована.
+Завжди починай з `PAPER_TRADING=true` і ніколи не торгуй грошима які не готовий втратити.

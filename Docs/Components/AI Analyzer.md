@@ -1,125 +1,157 @@
-# AI Analyzer — Анализ сигналов через Claude
+# AI Analyzer — Мультиагентний аналіз через Claude
 
-Вызывается после того как токен прошёл [[Strategy/Filters and Security|Rule Filters]]. Стоит денег ($0.01-0.05 за вызов), поэтому только для перспективных кандидатов.
-
----
-
-## Что анализирует Claude
-
-1. **Качество твитов** — реальный интерес или боты с накрутками?
-2. **Нарратив** — есть ли у токена понятная история/мем?
-3. **Timing** — на каком этапе хайп (начало/пик/конец)?
-4. **Red flags** — признаки скама в описании, имени, истории создателя
-5. **Потенциал** — схожесть с прошлыми успешными токенами
+Викликається для токенів що пройшли Python pre-filter. Використовує 3-стадійну архітектуру:
 
 ---
 
-## Промпт
+## Архітектура: 3 стадії
 
-```python
-SYSTEM_PROMPT = """
-You are a Solana meme token analyst. Your job is to evaluate tokens for short-term 
-trading potential (2x-10x within hours/days). Be concise and data-driven.
-
-Return ONLY valid JSON. No markdown, no extra text.
-"""
-
-def build_analysis_prompt(signal: TokenSignal) -> str:
-    return f"""
-Analyze this Solana token for short-term trading potential:
-
-TOKEN INFO:
-- Symbol: ${signal.symbol}
-- Name: {signal.name}  
-- Description: {signal.description}
-- Age: {signal.age_minutes} minutes
-- Market Cap: ${signal.market_cap_usd:,.0f}
-- Liquidity: {signal.liquidity_sol:.1f} SOL
-- Holders: {signal.holder_count}
-- Top 10 holders: {signal.top10_holder_pct:.1f}% of supply
-- Dev wallet sold: {signal.dev_wallet_sold}
-- Buy/Sell ratio (1h): {signal.buys_1h}/{signal.sells_1h}
-
-SOCIAL SIGNALS:
-- Twitter mentions (1h): {signal.twitter_mentions_1h}
-- KOL mentions: {', '.join(signal.kol_mentions) if signal.kol_mentions else 'none'}
-- Top tweets:
-{chr(10).join(f'  [{t.likes}L {t.retweets}RT] {t.text[:200]}' for t in signal.tweet_texts[:5])}
-
-Respond with JSON:
-{{
-  "score": <1-10, where 7+ = buy>,
-  "confidence": <"low"|"medium"|"high">,
-  "reasoning": "<2-3 sentences why>",
-  "risk_level": <"low"|"medium"|"high"|"extreme">,
-  "suggested_position_sol": <0.05-0.5>,
-  "red_flags": ["<flag1>", "<flag2>"],
-  "narrative_strength": <1-10>,
-  "estimated_timeframe": "<short: hours|medium: 1-3 days|long: week+>"
-}}
-"""
+```
+Токен (пройшов mcap > $5k)
+       │
+       ▼
+┌─────────────────────────────────────────────────────┐
+│  СТАДІЯ 1: Python pre-filter  (без Claude, ~90% відхиляє)  │
+│  DexScreener + Birdeye паралельно                   │
+│  Hard reject якщо: нема обʼєму / mint authority /   │
+│  freeze authority / creator >20% / top10 >70%       │
+└──────────────────────┬──────────────────────────────┘
+                       │ пройшов (~10%)
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  СТАДІЯ 2: 2 спеціалісти (Haiku, паралельно)        │
+│  [Twitter agent] → JSON звіт                        │
+│  [GMGN agent]    → JSON звіт                        │
+└──────────────────────┬──────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│  СТАДІЯ 3: Master agent (Opus)                      │
+│  Отримує: DexScreener дані + Birdeye дані +         │
+│           Twitter звіт + GMGN звіт                  │
+│  Повертає: вердикт JSON з score 1-10                │
+└─────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Логика вызова
+## Стадія 1 — Python pre-filter (без Claude)
+
+Детерміновані правила, жодного AI виклику:
 
 ```python
-import anthropic
+# DexScreener перевірки
+if not pairs:             → reject "no_dex_pairs"
+if buys_1h < 5:           → reject "no_buying_activity"
+if volume_1h < $500:      → reject "low_volume"
 
-async def analyze_token(signal: TokenSignal) -> AIAnalysis:
-    client = anthropic.Anthropic()
-    
-    response = client.messages.create(
-        model="claude-opus-4-8",   # лучшая модель для анализа
-        max_tokens=500,
-        system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": build_analysis_prompt(signal)
-        }]
-    )
-    
-    result = json.loads(response.content[0].text)
-    
-    # Финальный скор = комбинация rule score + ai score
-    final_score = (signal.rule_score * 0.4) + (result["score"] * 0.6)
-    
-    return AIAnalysis(
-        score=result["score"],
-        final_score=final_score,
-        confidence=result["confidence"],
-        reasoning=result["reasoning"],
-        risk_level=result["risk_level"],
-        suggested_position_sol=result["suggested_position_sol"],
-        red_flags=result["red_flags"],
-    )
+# Birdeye security перевірки
+if is_mintable:           → reject "mint_authority_not_revoked"
+if is_freezable:          → reject "freeze_authority_exists"
+if creator_pct > 20:      → reject "creator_X_pct"
+if top10_holder_pct > 70: → reject "top10_X_pct"
+if lp_locked_pct < 10:    → reject "lp_not_locked"
+```
+
+**Результат:** ~90% токенів відхиляються. 0 Claude API викликів витрачено.
+
+---
+
+## Стадія 2 — Спеціалісти (Haiku)
+
+Два агенти запускаються паралельно через `asyncio.gather()`.
+
+### Twitter агент
+
+Шукає по тикеру (`$SYMBOL`) і по темі (якщо назва схожа на меми/знаменитість):
+
+```
+Повертає JSON:
+{
+  "sentiment": "bullish|bearish|neutral|mixed",
+  "organic_score": 1-10,
+  "kol_count": <кількість аккаунтів >10k фолловерів>,
+  "bot_likelihood": "low|medium|high",
+  "narrative": "<реальна тема що драйвить інтерес>",
+  "pre_existing_hype": <true якщо тема існувала ДО токена>,
+  "top_accounts": ["@handle (Xk): цитата"],
+  "summary": "2-3 речення"
+}
+```
+
+### GMGN агент
+
+Перевіряє smart money, поведінку dev'а, rug ризик:
+
+```
+Повертає JSON:
+{
+  "smart_money_count": <кількість або null>,
+  "dev_behavior": "healthy|suspicious|dumping|unknown",
+  "rat_traders": "low|medium|high|unknown",
+  "rug_risk": "low|medium|high|unknown",
+  "red_flags": ["<прапор>"],
+  "summary": "2-3 речення"
+}
 ```
 
 ---
 
-## Пороговые значения
+## Стадія 3 — Master agent (Opus)
 
-| final_score | Действие |
-|-------------|----------|
-| < 6.0 | Пропустить |
-| 6.0 - 7.0 | Маленькая позиция (0.05 SOL) |
-| 7.0 - 8.5 | Стандартная позиция (0.1-0.2 SOL) |
-| 8.5+ | Увеличенная позиция (0.3-0.5 SOL) |
+Отримує всі 4 звіти і приймає фінальне рішення:
+
+```python
+MASTER_SYSTEM = """
+Ти фінальний арбітр. Токен вже пройшов DexScreener + Birdeye фільтри.
+Твоя задача: оцінити потенціал на основі 4 джерел.
+
+Score 8-10: сильний обʼєм + органічний Twitter нарратив + smart money
+Score 7:    3 з 4 сигналів позитивні
+Score 5-6:  змішані сигнали, пропустити
+Score 1-4:  GMGN показує rug risk / dev dumps / Twitter = боти
+"""
+```
+
+Вердикт JSON:
+```json
+{
+  "score": 8,
+  "confidence": "high",
+  "reasoning": "Strong organic community around pre-existing meme...",
+  "risk_level": "medium",
+  "suggested_position_sol": 0.2,
+  "red_flags": [],
+  "narrative_strength": 9,
+  "estimated_timeframe": "hours"
+}
+```
 
 ---
 
-## Стоимость вызовов
+## Вартість викликів
 
-- Claude Opus 4: ~$15 / 1M input tokens, ~$75 / 1M output tokens
-- Один вызов ≈ ~800 input + 200 output tokens ≈ **$0.027**
-- 100 анализов в день = ~$2.70/день
-- Фильтры должны отсеивать 90%+ токенов до AI — это снижает расходы
+| Сценарій | Claude виклики | Приблизна вартість |
+|----------|---------------|-------------------|
+| Відхилено на pre-filter (~90%) | **0** | $0.00 |
+| Пройшов (2 Haiku + 1 Opus) | **3** | ~$0.02 |
+
+**При 100 токенах за цикл:** ~10 проходять pre-filter → ~$0.20 на цикл vs ~$5.00 у старій архітектурі.
+
+---
+
+## Моделі
+
+| Агент | Модель | Причина |
+|-------|--------|---------|
+| Twitter спеціаліст | `claude-haiku-4-5-20251001` | Дешевий, достатньо для одного джерела |
+| GMGN спеціаліст | `claude-haiku-4-5-20251001` | Дешевий, достатньо для одного джерела |
+| Master | `claude-opus-4-8` | Найкраща модель для фінального рішення |
 
 ---
 
 ## Ссылки
 
-- [[Components/Data Sources]] — откуда берутся данные для анализа
-- [[Components/Trade Executor]] — что происходит после высокого скора
-- [[Strategy/Filters and Security]] — фильтры перед AI вызовом
+- [[Components/Data Sources]] — джерела даних
+- [[Components/Trade Executor]] — що відбувається після score ≥ 7
+- [[Strategy/Filters and Security]] — Python pre-filter деталі
