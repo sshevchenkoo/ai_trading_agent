@@ -8,6 +8,7 @@ from utils.logger import get_logger
 log = get_logger("dexscreener")
 
 BASE_URL = "https://api.dexscreener.com"
+BIRDEYE_URL = "https://public-api.birdeye.so"
 
 
 async def fetch_new_pairs() -> list[TokenSignal]:
@@ -38,6 +39,55 @@ async def fetch_new_pairs() -> list[TokenSignal]:
 
     except Exception as e:
         log.error("dexscreener_poll_failed", error=str(e))
+        return []
+
+
+async def fetch_top_gainers(limit: int = 10) -> list[TokenSignal]:
+    """
+    Fetch top Solana tokens by 5-minute price gain from Birdeye.
+    Catches tokens that are already pumping — different from new pump.fun launches.
+    Requires BIRDEYE_API_KEY.
+    """
+    from config import settings
+    if not settings.birdeye_api_key:
+        return []
+
+    try:
+        headers = {"X-API-KEY": settings.birdeye_api_key, "x-chain": "solana"}
+        async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+            resp = await client.get(
+                f"{BIRDEYE_URL}/defi/v3/token/list",
+                params={
+                    "sort_by": "priceChange5mPercent",
+                    "sort_type": "desc",
+                    "min_liquidity": 1000,
+                    "limit": limit,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        items = (data.get("data") or {}).get("items") or []
+        signals = []
+        for item in items[:limit]:
+            address = item.get("address")
+            if not address:
+                continue
+            signals.append(TokenSignal(
+                token_address=address,
+                symbol=(item.get("symbol") or "???")[:15],
+                name=(item.get("name") or "")[:50],
+                description="",
+                source="dex_top_gainers",
+                market_cap_usd=float(item.get("mc") or 0),
+                liquidity_sol=0.0,
+            ))
+
+        log.info("top_gainers_fetched", count=len(signals))
+        return signals
+
+    except Exception as e:
+        log.warning("top_gainers_failed", error=str(e))
         return []
 
 

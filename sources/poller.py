@@ -1,7 +1,7 @@
 import asyncio
 from typing import Callable, Awaitable
 
-from sources.dexscreener import fetch_new_pairs, enrich_signal
+from sources.dexscreener import fetch_new_pairs, fetch_top_gainers, enrich_signal
 from sources.market_data import get_market_context
 from sources.signal import TokenSignal
 from utils.logger import get_logger
@@ -51,13 +51,15 @@ class Poller:
         log.info("poll_cycle_start")
 
         pumpfun_tokens = _drain_queue(self.queue)
-        dex_tokens, market_ctx = await asyncio.gather(
+        dex_tokens, top_gainers, market_ctx = await asyncio.gather(
             fetch_new_pairs(),
+            fetch_top_gainers(limit=10),
             get_market_context(),
         )
 
+        # pump.fun wins on duplicates (has richer metadata)
         merged: dict[str, TokenSignal] = {}
-        for sig in pumpfun_tokens + dex_tokens:
+        for sig in pumpfun_tokens + dex_tokens + top_gainers:
             if sig.token_address not in merged:
                 merged[sig.token_address] = sig
 
@@ -70,6 +72,7 @@ class Poller:
             "poll_cycle_collected",
             pumpfun=len(pumpfun_tokens),
             dexscreener=len(dex_tokens),
+            top_gainers=len(top_gainers),
             new_unique=len(new_tokens),
         )
 
