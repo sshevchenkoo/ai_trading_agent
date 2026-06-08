@@ -7,11 +7,18 @@ from sources.pumpfun import PumpFunCollector
 from sources.poller import Poller
 from sources.signal import TokenSignal
 from analysis.ai_analyzer import analyze_token
+from trading.executor import TradeExecutor
+from positions.manager import PositionManager
+from positions.monitor import PositionMonitor
 from utils.logger import setup_logging, get_logger
 
 log = get_logger("main")
 
 POLL_INTERVAL_SEC = 300  # 5 minutes
+
+position_manager = PositionManager()
+executor = TradeExecutor(position_manager)
+monitor = PositionMonitor(executor, position_manager)
 
 
 async def handle_token(signal: TokenSignal):
@@ -56,7 +63,7 @@ async def handle_token(signal: TokenSignal):
         reasoning=analysis["reasoning"],
     )
 
-    # TODO Phase 3: Trade Executor → execute buy
+    await executor.buy(signal, analysis["suggested_position_sol"])
 
 
 def _save_token(signal: TokenSignal):
@@ -103,11 +110,16 @@ async def main():
     )
 
     try:
-        await asyncio.gather(collector.start(), poller.start())
+        await asyncio.gather(
+            collector.start(),
+            poller.start(),
+            monitor.start(),
+        )
     except KeyboardInterrupt:
         log.info("bot_stopped")
         await collector.stop()
         await poller.stop()
+        await monitor.stop()
 
 
 if __name__ == "__main__":
