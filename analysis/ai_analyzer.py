@@ -11,50 +11,30 @@ log = get_logger("ai_analyzer")
 
 # ─── Models ──────────────────────────────────────────────────────────────────
 
-SPECIALIST_MODEL = "claude-haiku-4-5-20251001"  # fast + cheap per specialist
-MASTER_MODEL = "claude-opus-4-8"                 # best model for final verdict
+SPECIALIST_MODEL = "claude-haiku-4-5-20251001"
+MASTER_MODEL = "claude-opus-4-8"
 
-# ─── Tool definitions (one per specialist) ───────────────────────────────────
+# Pre-filter thresholds (deterministic — no Claude needed)
+MIN_BUYS_1H = 5          # at least 5 buy txns in last hour
+MIN_VOLUME_1H_USD = 500  # at least $500 volume in last hour
+
+# ─── Tool definitions ────────────────────────────────────────────────────────
 
 TWITTER_TOOL = {
     "name": "search_twitter",
     "description": (
         "Search Twitter/X for recent tweets. Use it twice: "
-        "1) search '$SYMBOL' to find token mentions and KOLs; "
-        "2) if token name looks like a celebrity/meme/event, search that topic "
+        "1) search '$SYMBOL' for token mentions and KOLs; "
+        "2) if token name hints at a celebrity/meme/event, search that topic "
         "to find organic hype that existed BEFORE the token was created."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query"},
+            "query": {"type": "string"},
             "max_results": {"type": "integer", "default": 20},
         },
         "required": ["query"],
-    },
-}
-
-DEXSCREENER_TOOL = {
-    "name": "get_dexscreener",
-    "description": "Fetch DexScreener trading data for a Solana token: price, volume, liquidity, buy/sell counts.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "token_address": {"type": "string", "description": "Solana token contract address"},
-        },
-        "required": ["token_address"],
-    },
-}
-
-BIRDEYE_TOOL = {
-    "name": "get_birdeye",
-    "description": "Fetch Birdeye security and holder analytics: mint/freeze authority, LP locked %, holder concentration.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "token_address": {"type": "string", "description": "Solana token contract address"},
-        },
-        "required": ["token_address"],
     },
 }
 
@@ -64,7 +44,7 @@ GMGN_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "token_address": {"type": "string", "description": "Solana token contract address"},
+            "token_address": {"type": "string"},
         },
         "required": ["token_address"],
     },
@@ -74,63 +54,23 @@ GMGN_TOOL = {
 
 TWITTER_SYSTEM = """You are a Twitter/social sentiment analyst for Solana meme tokens.
 
-Search for the token by ticker AND by name (if the name hints at a celebrity, meme, or event — search that topic to find organic pre-existing hype, the strongest buy signal).
+Search by ticker AND by name. If the name hints at a celebrity, meme, or event — search that topic to find organic pre-existing hype (strongest buy signal).
 
 Return ONLY valid JSON:
 {
   "sentiment": "bullish|bearish|neutral|mixed",
   "organic_score": <1-10, 1=all bots, 10=real community>,
-  "kol_count": <number of accounts with >10k followers mentioning it>,
+  "kol_count": <accounts with >10k followers mentioning it>,
   "bot_likelihood": "low|medium|high",
-  "narrative": "<key narrative or topic driving interest, or null>",
-  "top_accounts": ["@handle (Xk followers): short quote"],
-  "pre_existing_hype": <true if the topic was trending BEFORE the token>,
-  "summary": "<2-3 sentences with your analysis>"
-}"""
-
-DEXSCREENER_SYSTEM = """You are a DexScreener trading analyst for Solana meme tokens.
-
-Fetch trading data and assess whether real buying pressure exists. Zero volume = ghost token = reject.
-
-Return ONLY valid JSON:
-{
-  "has_trading": <true/false>,
-  "volume_1h_usd": <number or null>,
-  "buy_sell_ratio_1h": <buys/sells, null if no data>,
-  "price_change_1h_pct": <float or null>,
-  "liquidity_usd": <number or null>,
-  "market_cap_usd": <number or null>,
-  "red_flags": ["<flag>"],
-  "summary": "<2-3 sentences with your analysis>"
-}"""
-
-BIRDEYE_SYSTEM = """You are a Birdeye security analyst for Solana meme tokens.
-
-Check ALL security flags and holder distribution. Be strict — any single hard flag = fail.
-
-Hard fail (security_pass=false) if ANY of:
-- Mint authority not revoked
-- Freeze authority exists
-- Creator holds >20%
-- Top 10 holders own >70%
-- LP locked <10%
-
-Return ONLY valid JSON:
-{
-  "security_pass": <true/false>,
-  "mint_revoked": <true/false>,
-  "freeze_revoked": <true/false>,
-  "lp_locked_pct": <float or null>,
-  "creator_pct": <float or null>,
-  "top10_pct": <float or null>,
-  "holder_count": <number or null>,
-  "red_flags": ["<flag>"],
-  "summary": "<2-3 sentences with your analysis>"
+  "narrative": "<key real-world topic driving interest, or null>",
+  "pre_existing_hype": <true if topic was trending BEFORE the token>,
+  "top_accounts": ["@handle (Xk): short quote"],
+  "summary": "<2-3 sentences>"
 }"""
 
 GMGN_SYSTEM = """You are a GMGN smart money analyst for Solana meme tokens.
 
-Check for smart wallet accumulation, dev behavior, and insider activity.
+Fetch and interpret smart wallet data. Flag suspicious dev behavior and insider activity.
 
 Return ONLY valid JSON:
 {
@@ -138,88 +78,52 @@ Return ONLY valid JSON:
   "dev_behavior": "healthy|suspicious|dumping|unknown",
   "rat_traders": "low|medium|high|unknown",
   "rug_risk": "low|medium|high|unknown",
-  "top10_holder_rate": <float 0-1 or null>,
+  "top_10_holder_rate": <float 0-1 or null>,
   "red_flags": ["<flag>"],
-  "summary": "<2-3 sentences with your analysis>"
+  "summary": "<2-3 sentences>"
 }"""
 
-MASTER_SYSTEM = """You are the final decision-maker for Solana meme token trading. You receive reports from 4 specialist agents.
+MASTER_SYSTEM = """You are the final decision-maker for Solana meme token trading.
 
-Decision rules:
-- If Birdeye security_pass=false → ALWAYS reject (score 1-3)
-- If DexScreener has_trading=false → reject (score 1-3)
-- Strong buy (8-10): clean security + real volume + organic Twitter hype + smart money present
-- Good buy (7): 3 of 4 signals positive
-- Neutral (5-6): mixed signals, wait or small position
-- Reject (1-4): any hard fail OR more than 2 red flags across reports
+You receive:
+- DexScreener data: raw trading metrics (already passed: buys_1h >= 5, volume >= $500)
+- Birdeye data: raw security data (already passed: no mint/freeze authority, creator <20%, top10 <70%)
+- Twitter report: analyzed by specialist agent
+- GMGN report: analyzed by specialist agent
+
+The token already cleared hard security and activity filters. Your job: judge upside potential.
+
+Score guide:
+- 8-10 (strong buy): real volume + organic Twitter narrative + smart money present
+- 7 (buy): 3 of 4 signals positive, manageable risk
+- 5-6 (skip): mixed signals, not confident
+- 1-4 (no): GMGN shows high rug risk OR dev dumping OR Twitter all bots
 
 Return ONLY valid JSON:
 {
-  "score": <integer 1-10, 7+ = buy>,
+  "score": <integer 1-10>,
   "confidence": "low|medium|high",
-  "reasoning": "<2-3 sentences synthesizing all 4 reports>",
+  "reasoning": "<2-3 sentences synthesizing all 4 data sources>",
   "risk_level": "low|medium|high|extreme",
   "suggested_position_sol": <float 0.05-0.5>,
-  "red_flags": ["<combined critical flags>"],
-  "narrative_strength": <1-10>,
+  "red_flags": ["<flag>"],
+  "narrative_strength": <integer 1-10>,
   "estimated_timeframe": "hours|1-3 days|week+"
 }"""
 
-# ─── Tool execution ───────────────────────────────────────────────────────────
-
-async def _execute_tool(name: str, inputs: dict) -> str:
-    if name == "search_twitter":
-        return await _twitter_search(inputs["query"], inputs.get("max_results", 20))
-    if name == "get_dexscreener":
-        return await _dexscreener_fetch(inputs["token_address"])
-    if name == "get_birdeye":
-        return await _birdeye_fetch(inputs["token_address"])
-    if name == "get_gmgn":
-        return await _gmgn_fetch(inputs["token_address"])
-    return json.dumps({"error": f"unknown tool: {name}"})
-
-
-async def _twitter_search(query: str, max_results: int) -> str:
-    if not settings.twitter_bearer_token:
-        return json.dumps({"error": "TWITTER_BEARER_TOKEN not set", "tweets": []})
-    try:
-        import tweepy
-        client = tweepy.Client(bearer_token=settings.twitter_bearer_token, wait_on_rate_limit=False)
-        response = client.search_recent_tweets(
-            query=f"{query} lang:en -is:retweet",
-            max_results=min(max(max_results, 10), 50),
-            tweet_fields=["text", "public_metrics", "author_id"],
-            expansions=["author_id"],
-            user_fields=["username", "public_metrics"],
-        )
-        users = {}
-        if response.includes and response.includes.get("users"):
-            for u in response.includes["users"]:
-                users[u.id] = {"username": u.username, "followers": u.public_metrics["followers_count"]}
-        tweets = []
-        for tweet in response.data or []:
-            author = users.get(tweet.author_id, {})
-            tweets.append({
-                "text": tweet.text[:280],
-                "author": author.get("username", "unknown"),
-                "followers": author.get("followers", 0),
-                "likes": tweet.public_metrics["like_count"],
-                "retweets": tweet.public_metrics["retweet_count"],
-            })
-        return json.dumps({"tweets": tweets, "total": len(tweets)})
-    except Exception as e:
-        return json.dumps({"error": str(e), "tweets": []})
-
+# ─── Raw API fetchers (used by pre-filter and as tool backends) ───────────────
 
 async def _dexscreener_fetch(token_address: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{token_address}")
+            resp = await client.get(
+                f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
+            )
             resp.raise_for_status()
             data = resp.json()
         pairs = data.get("pairs") or []
         if not pairs:
-            return json.dumps({"error": "no trading pairs found", "pairs": 0})
+            return json.dumps({"error": "no trading pairs found", "pairs_count": 0})
         pair = max(pairs, key=lambda p: float(p.get("liquidity", {}).get("usd", 0) or 0))
         return json.dumps({
             "pairs_count": len(pairs),
@@ -258,7 +162,9 @@ async def _gmgn_fetch(token_address: str) -> str:
             "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         }
         async with httpx.AsyncClient(timeout=10, headers=headers) as client:
-            resp = await client.get(f"https://gmgn.ai/defi/quotation/v1/tokens/sol/{token_address}")
+            resp = await client.get(
+                f"https://gmgn.ai/defi/quotation/v1/tokens/sol/{token_address}"
+            )
             resp.raise_for_status()
             data = resp.json()
         token = (data.get("data") or {}).get("token") or {}
@@ -279,7 +185,114 @@ async def _gmgn_fetch(token_address: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-# ─── Specialist agent runner ──────────────────────────────────────────────────
+async def _twitter_search(query: str, max_results: int) -> str:
+    if not settings.twitter_bearer_token:
+        return json.dumps({"error": "TWITTER_BEARER_TOKEN not set", "tweets": []})
+    try:
+        import tweepy
+        client = tweepy.Client(bearer_token=settings.twitter_bearer_token, wait_on_rate_limit=False)
+        response = client.search_recent_tweets(
+            query=f"{query} lang:en -is:retweet",
+            max_results=min(max(max_results, 10), 50),
+            tweet_fields=["text", "public_metrics", "author_id"],
+            expansions=["author_id"],
+            user_fields=["username", "public_metrics"],
+        )
+        users = {}
+        if response.includes and response.includes.get("users"):
+            for u in response.includes["users"]:
+                users[u.id] = {"username": u.username, "followers": u.public_metrics["followers_count"]}
+        tweets = []
+        for tweet in response.data or []:
+            author = users.get(tweet.author_id, {})
+            tweets.append({
+                "text": tweet.text[:280],
+                "author": author.get("username", "unknown"),
+                "followers": author.get("followers", 0),
+                "likes": tweet.public_metrics["like_count"],
+                "retweets": tweet.public_metrics["retweet_count"],
+            })
+        return json.dumps({"tweets": tweets, "total": len(tweets)})
+    except Exception as e:
+        return json.dumps({"error": str(e), "tweets": []})
+
+
+async def _execute_tool(name: str, inputs: dict) -> str:
+    if name == "search_twitter":
+        return await _twitter_search(inputs["query"], inputs.get("max_results", 20))
+    if name == "get_gmgn":
+        return await _gmgn_fetch(inputs["token_address"])
+    return json.dumps({"error": f"unknown tool: {name}"})
+
+
+# ─── Stage 1: Python pre-filter (no Claude) ──────────────────────────────────
+
+async def _prefilter(signal: TokenSignal) -> tuple[bool, dict, dict]:
+    """
+    Fetch DexScreener + Birdeye in parallel, apply hard deterministic rules.
+    Rejects ~90% of tokens without spending a single Claude API call.
+    Returns (passes, dex_data, birdeye_data).
+    """
+    dex_json, birdeye_json = await asyncio.gather(
+        _dexscreener_fetch(signal.token_address),
+        _birdeye_fetch(signal.token_address),
+    )
+
+    dex = json.loads(dex_json)
+    birdeye = json.loads(birdeye_json)
+    sym = signal.symbol
+
+    # ── DexScreener checks ────────────────────────────────────────────────
+    if dex.get("error") or not dex.get("pairs_count"):
+        log.info("prefilter_reject", symbol=sym, reason="no_dex_pairs")
+        return False, dex, birdeye
+
+    buys_1h = int(dex.get("buys_1h") or 0)
+    if buys_1h < MIN_BUYS_1H:
+        log.info("prefilter_reject", symbol=sym, reason=f"buys_1h={buys_1h} < {MIN_BUYS_1H}")
+        return False, dex, birdeye
+
+    vol_1h = float(dex.get("volume_1h") or 0)
+    if vol_1h < MIN_VOLUME_1H_USD:
+        log.info("prefilter_reject", symbol=sym, reason=f"volume_1h=${vol_1h:.0f} < ${MIN_VOLUME_1H_USD}")
+        return False, dex, birdeye
+
+    # ── Birdeye security checks ───────────────────────────────────────────
+    if birdeye.get("is_mintable"):
+        log.info("prefilter_reject", symbol=sym, reason="mint_authority_not_revoked")
+        return False, dex, birdeye
+
+    if birdeye.get("is_freezable"):
+        log.info("prefilter_reject", symbol=sym, reason="freeze_authority_exists")
+        return False, dex, birdeye
+
+    creator_pct = float(birdeye.get("creator_pct") or 0)
+    if creator_pct > 20:
+        log.info("prefilter_reject", symbol=sym, reason=f"creator_{creator_pct:.0f}pct")
+        return False, dex, birdeye
+
+    top10_pct = float(birdeye.get("top10_holder_pct") or 0)
+    if top10_pct > 70:
+        log.info("prefilter_reject", symbol=sym, reason=f"top10_{top10_pct:.0f}pct")
+        return False, dex, birdeye
+
+    lp_pct = birdeye.get("lp_locked_pct")
+    if lp_pct is not None and float(lp_pct) < 10:
+        log.info("prefilter_reject", symbol=sym, reason=f"lp_locked_{lp_pct:.0f}pct")
+        return False, dex, birdeye
+
+    log.info(
+        "prefilter_pass",
+        symbol=sym,
+        buys_1h=buys_1h,
+        volume_1h=round(vol_1h),
+        creator_pct=creator_pct,
+        top10_pct=top10_pct,
+    )
+    return True, dex, birdeye
+
+
+# ─── Stage 2: Specialist agents (Haiku, parallel) ────────────────────────────
 
 async def _run_specialist(
     name: str,
@@ -290,21 +303,19 @@ async def _run_specialist(
     token_name: str,
     description: str,
 ) -> dict:
-    """Run one specialist Claude agent with a single tool. Returns its JSON report."""
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     user_msg = (
         f"Token: ${symbol} ({token_name})\n"
         f"Address: {token_address}\n"
         f"Description: {description[:200] if description else 'none'}\n\n"
-        f"Use your tool to investigate this token and return your JSON report."
+        f"Use your tool to investigate and return your JSON report."
     )
 
     messages = [{"role": "user", "content": user_msg}]
-    max_loops = 4
     raw = ""
 
-    for _ in range(max_loops):
+    for _ in range(4):  # max 4 tool calls per specialist
         response = client.messages.create(
             model=SPECIALIST_MODEL,
             max_tokens=512,
@@ -317,7 +328,7 @@ async def _run_specialist(
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    log.info("specialist_tool_call", agent=name, tool=block.name, symbol=symbol)
+                    log.info("specialist_tool_call", agent=name, symbol=symbol)
                     result = await _execute_tool(block.name, block.input)
                     tool_results.append({
                         "type": "tool_result",
@@ -340,10 +351,9 @@ async def _run_specialist(
         return {"error": f"{name} returned invalid JSON", "summary": "data unavailable"}
 
 
-# ─── Master agent ─────────────────────────────────────────────────────────────
+# ─── Stage 3: Master agent (Opus) ────────────────────────────────────────────
 
 async def _master_agent(signal: TokenSignal, reports: dict) -> dict:
-    """Receives all 4 specialist reports and makes the final buy/no-buy verdict."""
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     m = signal.market
@@ -353,22 +363,24 @@ async def _master_agent(signal: TokenSignal, reports: dict) -> dict:
         if m and m.sol_price_usd else "unavailable"
     )
 
-    user_msg = f"""Make a final verdict on this Solana token based on the 4 specialist reports below.
+    user_msg = f"""Make a final verdict on this Solana token.
 
-TOKEN: ${signal.symbol} ({signal.name}) — mcap ${signal.market_cap_usd:,.0f} — age {signal.age_minutes} min
-Source: {signal.source} | Twitter: {signal.twitter_url or "none"} | Market: {market_line}
+TOKEN: ${signal.symbol} ({signal.name})
+Address: {signal.token_address}
+Age: {signal.age_minutes} min | Market Cap: ${signal.market_cap_usd:,.0f}
+Twitter: {signal.twitter_url or "none"} | Market: {market_line}
 
-━━━ TWITTER REPORT ━━━
-{json.dumps(reports.get("twitter", {"error": "unavailable"}), indent=2)}
+━━━ DEXSCREENER (raw data, already passed volume filter) ━━━
+{json.dumps(reports["dexscreener"], indent=2)}
 
-━━━ DEXSCREENER REPORT ━━━
-{json.dumps(reports.get("dexscreener", {"error": "unavailable"}), indent=2)}
+━━━ BIRDEYE (raw data, already passed security filter) ━━━
+{json.dumps(reports["birdeye"], indent=2)}
 
-━━━ BIRDEYE REPORT ━━━
-{json.dumps(reports.get("birdeye", {"error": "unavailable"}), indent=2)}
+━━━ TWITTER REPORT (specialist analysis) ━━━
+{json.dumps(reports["twitter"], indent=2)}
 
-━━━ GMGN REPORT ━━━
-{json.dumps(reports.get("gmgn", {"error": "unavailable"}), indent=2)}
+━━━ GMGN REPORT (specialist analysis) ━━━
+{json.dumps(reports["gmgn"], indent=2)}
 
 Return your JSON verdict."""
 
@@ -391,42 +403,36 @@ async def analyze_token(signal: TokenSignal) -> dict | None:
         return None
 
     try:
-        # ── Run all 4 specialist agents in parallel ────────────────────────
-        log.info("multi_agent_start", symbol=signal.symbol, address=signal.token_address[:8])
+        # ── Stage 1: Python pre-filter (DexScreener + Birdeye, no Claude) ──
+        passes, dex_data, birdeye_data = await _prefilter(signal)
+        if not passes:
+            return None  # rejected — 0 Claude API calls spent
 
-        twitter_task = _run_specialist(
-            "twitter", TWITTER_SYSTEM, TWITTER_TOOL,
-            signal.token_address, signal.symbol, signal.name, signal.description,
-        )
-        dex_task = _run_specialist(
-            "dexscreener", DEXSCREENER_SYSTEM, DEXSCREENER_TOOL,
-            signal.token_address, signal.symbol, signal.name, signal.description,
-        )
-        birdeye_task = _run_specialist(
-            "birdeye", BIRDEYE_SYSTEM, BIRDEYE_TOOL,
-            signal.token_address, signal.symbol, signal.name, signal.description,
-        )
-        gmgn_task = _run_specialist(
-            "gmgn", GMGN_SYSTEM, GMGN_TOOL,
-            signal.token_address, signal.symbol, signal.name, signal.description,
-        )
+        # ── Stage 2: Specialist agents in parallel (Haiku) ─────────────────
+        log.info("specialists_start", symbol=signal.symbol)
 
-        twitter_r, dex_r, birdeye_r, gmgn_r = await asyncio.gather(
-            twitter_task, dex_task, birdeye_task, gmgn_task,
+        twitter_r, gmgn_r = await asyncio.gather(
+            _run_specialist(
+                "twitter", TWITTER_SYSTEM, TWITTER_TOOL,
+                signal.token_address, signal.symbol, signal.name, signal.description,
+            ),
+            _run_specialist(
+                "gmgn", GMGN_SYSTEM, GMGN_TOOL,
+                signal.token_address, signal.symbol, signal.name, signal.description,
+            ),
             return_exceptions=True,
         )
 
-        # Replace exceptions with error placeholders
         def _safe(r, name):
             if isinstance(r, Exception):
-                log.warning("specialist_failed", agent=name, error=str(r))
+                log.warning("specialist_exception", agent=name, error=str(r))
                 return {"error": str(r), "summary": "agent failed"}
             return r
 
         reports = {
+            "dexscreener": dex_data,
+            "birdeye": birdeye_data,
             "twitter": _safe(twitter_r, "twitter"),
-            "dexscreener": _safe(dex_r, "dexscreener"),
-            "birdeye": _safe(birdeye_r, "birdeye"),
             "gmgn": _safe(gmgn_r, "gmgn"),
         }
 
@@ -434,12 +440,10 @@ async def analyze_token(signal: TokenSignal) -> dict | None:
             "specialists_done",
             symbol=signal.symbol,
             twitter_ok="error" not in reports["twitter"],
-            dex_ok="error" not in reports["dexscreener"],
-            birdeye_ok="error" not in reports["birdeye"],
             gmgn_ok="error" not in reports["gmgn"],
         )
 
-        # ── Master agent makes final verdict ───────────────────────────────
+        # ── Stage 3: Master agent (Opus) makes final verdict ────────────────
         result = await _master_agent(signal, reports)
         result["final_score"] = result["score"]
 
