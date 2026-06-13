@@ -12,7 +12,15 @@
 
 ## Overview
 
-The agent monitors **pump.fun** (via WebSocket) and **DexScreener** every 5 minutes, collects new Solana tokens from three parallel sources, and passes candidates through a cost-optimised three-stage pipeline:
+The agent collects new Solana tokens from **three parallel sources** every 5 minutes and passes candidates through a cost-optimised pipeline:
+
+| Source | What it catches |
+|--------|----------------|
+| **pump.fun WebSocket** | Every new token at the moment of launch (real-time) |
+| **DexScreener new pairs** | Tokens from all Solana DEXs not yet on pump.fun |
+| **Birdeye top 5-min gainers** | Tokens already pumping — biggest % movers in last 5 minutes |
+
+All three feeds are merged, deduplicated, enriched with DexScreener metrics, and pushed through a cost-optimised three-stage analysis pipeline:
 
 | Stage | Who does it | Rejects |
 |-------|-------------|---------|
