@@ -1,16 +1,16 @@
-# Технический стек
+# Tech Stack
 
-## Язык: Python 3.11+
+## Language: Python 3.11+
 
-Python выбран потому что:
-- Нативный `anthropic` SDK
-- Лучшая экосистема для async I/O (asyncio)
-- Solana SDK (`solders`) имеет Python биндинги
-- Быстрее прототипировать
+Python was chosen because:
+- Native `anthropic` SDK
+- Best ecosystem for async I/O (asyncio)
+- Solana SDK (`solders`) has Python bindings
+- Fastest to prototype
 
 ---
 
-## Зависимости
+## Dependencies
 
 ```toml
 # pyproject.toml
@@ -19,64 +19,64 @@ Python выбран потому что:
 python = "^3.11"
 
 # Solana
-solders = "^0.21.0"          # Solana SDK (Rust-based, быстрый)
-solana = "^0.35.0"           # RPC клиент
+solders = "^0.21.0"          # Solana SDK (Rust-based, fast)
+solana = "^0.35.0"           # RPC client
 
 # AI
 anthropic = "^0.40.0"        # Claude API
 
 # HTTP / WebSocket
-httpx = "^0.27.0"            # async HTTP клиент
-websockets = "^12.0"         # WebSocket клиент
+httpx = "^0.27.0"            # async HTTP client
+websockets = "^12.0"         # WebSocket client
 
 # Twitter
 tweepy = "^4.14.0"           # X API v2
 
-# База данных
+# Database
 sqlmodel = "^0.0.21"         # ORM (SQLAlchemy + Pydantic)
 aiosqlite = "^0.20.0"        # async SQLite
 
-# Утилиты
-pydantic = "^2.8.0"          # валидация данных
-pydantic-settings = "^2.4.0" # конфиг из .env
-structlog = "^24.4.0"        # структурированные логи
-python-dotenv = "^1.0.1"     # .env файлы
-base58 = "^2.1.1"            # кодировка кошелька
+# Utilities
+pydantic = "^2.8.0"          # data validation
+pydantic-settings = "^2.4.0" # config from .env
+structlog = "^24.4.0"        # structured logging
+python-dotenv = "^1.0.1"     # .env files
+base58 = "^2.1.1"            # wallet key encoding
 
-# Мониторинг (опционально)
-prometheus-client = "^0.21.0" # метрики
+# Monitoring (optional)
+prometheus-client = "^0.21.0" # metrics
 ```
 
 ---
 
-## Структура проекта
+## Project structure
 
 ```
 solana_trader/
 ├── pyproject.toml
-├── .env                    # секреты (в .gitignore!)
-├── .env.example            # шаблон без секретов
+├── .env                    # secrets (in .gitignore!)
+├── .env.example            # template without secrets
 ├── .gitignore
 │
-├── main.py                 # точка входа, оркестратор
+├── main.py                 # entry point, orchestrator
 │
-├── config.py               # настройки из .env
+├── config.py               # settings from .env
 │
 ├── sources/
 │   ├── __init__.py
-│   ├── pumpfun.py          # WebSocket listener pump.fun
+│   ├── pumpfun.py          # WebSocket listener for pump.fun
 │   ├── dexscreener.py      # REST API poller
 │   └── twitter.py          # X API stream
 │
 ├── analysis/
 │   ├── __init__.py
-│   ├── filters.py          # Rule-based фильтры
-│   ├── rugcheck.py         # Rugcheck API интеграция
-│   └── ai_analyzer.py      # Claude API анализ
+│   ├── filters.py          # Rule-based filters
+│   ├── rugcheck.py         # Rugcheck API integration
+│   └── ai_analyzer.py      # Claude API analysis
 │
 ├── trading/
 │   ├── __init__.py
-│   ├── wallet.py           # Solana wallet управление
+│   ├── wallet.py           # Solana wallet management
 │   ├── jupiter.py          # Jupiter swap API
 │   └── executor.py         # Trade Executor
 │
@@ -87,20 +87,20 @@ solana_trader/
 │
 ├── db/
 │   ├── __init__.py
-│   ├── models.py           # SQLModel таблицы
-│   └── database.py         # подключение к БД
+│   ├── models.py           # SQLModel tables
+│   └── database.py         # database connection
 │
 └── utils/
     ├── __init__.py
-    └── logger.py           # настройка логов
+    └── logger.py           # log configuration
 ```
 
 ---
 
-## Конфигурация (.env)
+## Configuration (.env)
 
 ```bash
-# .env.example — копировать в .env, заполнить значениями
+# .env.example — copy to .env and fill in your values
 
 # Solana
 SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
@@ -116,58 +116,58 @@ TWITTER_API_SECRET=...
 TWITTER_ACCESS_TOKEN=...
 TWITTER_ACCESS_SECRET=...
 
-# Стратегия
+# Strategy
 MAX_POSITION_SIZE_SOL=0.2
 MIN_LIQUIDITY_SOL=50
 AI_SCORE_THRESHOLD=7.0
 MAX_OPEN_POSITIONS=5
 STOP_LOSS_PCT=50
 
-# Режим
-PAPER_TRADING=true          # true = не исполнять реальных сделок
+# Mode
+PAPER_TRADING=true          # true = no real trades executed
 LOG_LEVEL=INFO
 ```
 
 ---
 
-## Запуск
+## Running
 
 ```bash
-# Установка зависимостей
+# Install dependencies
 pip install poetry
 poetry install
 
-# Запуск (paper trading режим)
+# Run in paper trading mode
 poetry run python main.py
 
-# Запуск в боевом режиме
+# Run in live mode
 PAPER_TRADING=false poetry run python main.py
 
-# Запуск как сервис (systemd / screen)
+# Run as a service (systemd / screen)
 screen -S trader
 poetry run python main.py
-# Ctrl+A, D — отсоединиться
+# Ctrl+A, D — detach
 ```
 
 ---
 
-## Внешние сервисы и API-ключи
+## External services and API keys
 
-| Сервис | Зачем | Стоимость |
-|--------|-------|-----------|
-| Anthropic API | Claude анализ | pay-per-use (~$3-10/день) |
-| Helius RPC | Solana RPC | $49-499/мес |
-| Twitter/X API | Мониторинг твитов | $100/мес (Basic) |
-| Rugcheck | Проверка контрактов | бесплатно |
-| DexScreener | Цены и пары | бесплатно |
-| pump.fun WS | Новые токены | бесплатно |
+| Service | Purpose | Cost |
+|---------|---------|------|
+| Anthropic API | Claude analysis | pay-per-use (~$3–10/day) |
+| Helius RPC | Solana RPC | $49–499/mo |
+| Twitter/X API | Tweet monitoring | $100/mo (Basic) |
+| Rugcheck | Contract verification | free |
+| DexScreener | Prices and pairs | free |
+| pump.fun WS | New tokens | free |
 
-**Минимальный бюджет для старта:** ~$150/мес + торговый депозит (1-5 SOL)
+**Minimum budget to start:** ~$150/mo + trading deposit (1–5 SOL)
 
 ---
 
-## Ссылки
+## Links
 
-- [[Development/Roadmap]] — когда что добавляем
-- [[Components/Trade Executor]] — детали Jupiter интеграции
-- [[Components/AI Analyzer]] — детали Claude API
+- [[Development/Roadmap]] — what we add and when
+- [[Components/Trade Executor]] — Jupiter integration details
+- [[Components/AI Analyzer]] — Claude API details

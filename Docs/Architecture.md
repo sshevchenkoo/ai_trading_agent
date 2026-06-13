@@ -1,17 +1,17 @@
-# Архітектура системи
+# System Architecture
 
-## Загальна схема потоку даних
+## Data Flow Overview
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    DATA LAYER                           │
+│                      DATA LAYER                         │
 │                                                         │
-│  [pump.fun WS] ──┐  WebSocket, пасивний, завжди живий  │
-│  [DexScreener]  ──┼──► [asyncio.Queue]  (нові токени)  │
-│                  └──► збирає кожні 5 хв                │
+│  [pump.fun WS]  ──┐  WebSocket, passive, always-on     │
+│  [DexScreener]  ──┼──► [asyncio.Queue]  (new tokens)   │
+│                   └──► collected every 5 min           │
 └───────────────────────────────┬─────────────────────────┘
                                 │
-                     кожні 5 хвилин (Poller)
+                     every 5 minutes (Poller)
                                 │
                     ┌───────────▼───────────┐
                     │  DexScreener enrich   │
@@ -19,32 +19,32 @@
                     └───────────┬───────────┘
                                 │
                     ┌───────────▼───────────┐
-                    │  mcap > $5,000?       │
-                    │  NO → discard         │
+                    │   mcap > $5,000?      │
+                    │   NO → discard        │
                     └───────────┬───────────┘
                                 │ YES
                                 ▼
 ┌─────────────────────────────────────────────────────────┐
-│              ANALYSIS LAYER (3 стадії)                  │
+│               ANALYSIS LAYER (3 stages)                 │
 │                                                         │
 │  ┌──────────────────────────────────────────────────┐  │
-│  │ Стадія 1: Python pre-filter  (без Claude)        │  │
-│  │  DexScreener ──┐  паралельно                     │  │
-│  │  Birdeye ──────┘                                 │  │
-│  │  Hard reject: нема обʼєму / security flags       │  │
-│  │  ~90% токенів зупиняється тут (0 Claude calls)   │  │
+│  │ Stage 1: Python pre-filter  (zero Claude calls)  │  │
+│  │  DexScreener ──┐  parallel                       │  │
+│  │  Birdeye    ──┘                                  │  │
+│  │  Hard reject: no volume / security flags         │  │
+│  │  ~90% of tokens stopped here (0 Claude calls)    │  │
 │  └──────────────────────────┬───────────────────────┘  │
-│                             │ ~10% пройшло              │
+│                             │ ~10% passed               │
 │  ┌──────────────────────────▼───────────────────────┐  │
-│  │ Стадія 2: Specialist agents (Haiku, паралельно)  │  │
+│  │ Stage 2: Specialist agents (Haiku, parallel)     │  │
 │  │  [Twitter Haiku] ──┐                             │  │
-│  │  [GMGN Haiku]   ───┘ asyncio.gather()            │  │
+│  │  [GMGN Haiku]   ──┘  asyncio.gather()           │  │
 │  └──────────────────────────┬───────────────────────┘  │
 │                             │                           │
 │  ┌──────────────────────────▼───────────────────────┐  │
-│  │ Стадія 3: Master agent (Opus)                    │  │
-│  │  Отримує: DexScreener + Birdeye + Twitter + GMGN │  │
-│  │  Повертає: score 1-10 + вердикт                  │  │
+│  │ Stage 3: Master agent (Opus)                     │  │
+│  │  Receives: DexScreener + Birdeye + Twitter + GMGN│  │
+│  │  Returns:  score 1–10 + verdict                  │  │
 │  └──────────────────────────┬───────────────────────┘  │
 │                             │                           │
 │                    score ≥ 7.0?                         │
@@ -53,81 +53,81 @@
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────┐
-│                  TRADING LAYER (Phase 3)                │
+│                   TRADING LAYER (Phase 3)               │
 │                                                         │
-│          [Trade Executor] ──► [Solana Wallet]           │
-│                │              (Jupiter swap)            │
-│                │                                        │
+│           [Trade Executor] ──► [Solana Wallet]          │
+│                 │               (Jupiter swap)          │
+│                 │                                       │
 │          [Position Manager]                             │
-│                │                                        │
-│     ┌──────────┼──────────┐                             │
-│     ▼          ▼          ▼                             │
-│  [+100%]    [+300%]    [+900%]   [-50%]                 │
+│                 │                                       │
+│      ┌──────────┼──────────┐                            │
+│      ▼          ▼          ▼                            │
+│  [+100%]    [+300%]    [+900%]    [-50%]                │
 │  sell 50%  sell 25%  sell rest  stop-loss               │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Компоненти і їх ролі
+## Components and Roles
 
 ### Poller
-Кожні 5 хвилин: дренує чергу pump.fun + запитує DexScreener нові пари. Дедублікує токени, збагачує реальними метриками (mcap, liquidity), відсіює mcap < $5k.
+Every 5 minutes: drains the pump.fun queue + fetches DexScreener new pairs. Deduplicates tokens, enriches with real metrics (mcap, liquidity), discards mcap < $5k.
 
-### Python pre-filter (Стадія 1)
-Детерміновані перевірки — без AI. Паралельно запитує DexScreener і Birdeye, застосовує hard rules. ~90% токенів відхиляються тут без жодного Claude виклику.
+### Python pre-filter (Stage 1)
+Deterministic checks — no AI. Queries DexScreener and Birdeye in parallel, applies hard rules. ~90% of tokens are rejected here with zero Claude API calls.
 
-### Specialist agents (Стадія 2)
-Два Haiku агенти запускаються паралельно:
-- **Twitter агент** — sentiment, KOL mentions, органічний нарратив
-- **GMGN агент** — smart money, поведінка dev'а, rug risk
+### Specialist agents (Stage 2)
+Two Haiku agents run in parallel:
+- **Twitter agent** — sentiment, KOL mentions, organic narrative detection
+- **GMGN agent** — smart money wallets, dev behaviour, rug risk
 
-### Master agent (Стадія 3)
-Opus отримує всі 4 звіти (DexScreener + Birdeye з pre-filter + Twitter + GMGN від спеціалістів) і приймає фінальний вердикт.
+### Master agent (Stage 3)
+Opus receives all 4 reports (DexScreener + Birdeye from pre-filter + Twitter + GMGN from specialists) and makes the final verdict.
 
 ### Trade Executor (Phase 3)
-Викликає Jupiter API для отримання котировки і виконання свопу. Підписує транзакцію ключем гаманця.
+Calls the Jupiter API to get a quote and execute the swap. Signs the transaction with the wallet keypair.
 
 ### Position Manager (Phase 3)
-Зберігає всі відкриті позиції. Кожні N секунд запитує поточну ціну і перевіряє тригери продажу.
+Stores all open positions. Every 10 seconds fetches the current price and checks sell triggers.
 
 ---
 
-## Взаємодія в реальному часі
+## Real-time Timeline
 
 ```
-t=0ms     pump.fun WS → новий токен створений → в чергу
-t=0ms     ...накопичуємо 5 хвилин...
-t=300000ms Poller прокидається
-t=300010ms drain черги + DexScreener нові пари
-t=300050ms enrich всіх токенів (паралельно)
-t=300200ms mcap < $5k → discard більшість
-t=300210ms Stage 1: DexScreener + Birdeye паралельно (~90% reject)
-t=300600ms Stage 2: Twitter + GMGN Haiku паралельно
-t=301200ms Stage 3: Opus master вердикт
-t=301201ms score ≥ 7.0 → BUY_SIGNAL
-t=301300ms (Phase 3) Trade Executor → Jupiter swap
-t=302000ms транзакція підтверджена, Position Manager додає позицію
+t=0ms       pump.fun WS → new token created → pushed to queue
+t=0ms       ...accumulates over 5 minutes...
+t=300000ms  Poller wakes up
+t=300010ms  drain queue + DexScreener new pairs
+t=300050ms  enrich all tokens (parallel)
+t=300200ms  mcap < $5k → discard most
+t=300210ms  Stage 1: DexScreener + Birdeye parallel (~90% reject)
+t=300600ms  Stage 2: Twitter + GMGN Haiku parallel
+t=301200ms  Stage 3: Opus master verdict
+t=301201ms  score ≥ 7.0 → BUY_SIGNAL
+t=301300ms  (Phase 3) Trade Executor → Jupiter swap
+t=302000ms  transaction confirmed, Position Manager records position
 ```
 
 ---
 
-## Зберігання даних
+## Data Storage
 
 ```
 SQLite:
-├── tokens    — всі побачені токени і їх метрики
-├── signals   — всі сигнали від джерел
-├── positions — відкриті і закриті позиції
-├── trades    — історія всіх угод (buy/sell)
+├── tokens     — all seen tokens and their metrics
+├── signals    — all signals from sources
+├── positions  — open and closed positions
+├── trades     — full trade history (buy / sell)
 ```
 
 ---
 
-## Посилання
+## Links
 
-- [[Components/Data Sources]] — деталі по кожному джерелу
-- [[Components/AI Analyzer]] — мультиагентний аналіз
-- [[Components/Trade Executor]] — Jupiter інтеграція
-- [[Components/Position Manager]] — логіка виходів
-- [[Strategy/Filters and Security]] — Python pre-filter правила
+- [[Components/Data Sources]] — details on each data source
+- [[Components/AI Analyzer]] — multi-agent analysis
+- [[Components/Trade Executor]] — Jupiter integration
+- [[Components/Position Manager]] — exit logic
+- [[Strategy/Filters and Security]] — Python pre-filter rules

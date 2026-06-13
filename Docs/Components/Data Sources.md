@@ -1,19 +1,19 @@
-# Data Sources — Источники данных
+# Data Sources
 
-Три независимых источника сигналов, которые работают параллельно и скармливают данные в [[Architecture#Signal Aggregator|Signal Aggregator]].
+Three independent signal sources running in parallel, feeding data into the [[Architecture#Signal Aggregator|Signal Aggregator]].
 
 ---
 
 ## 1. pump.fun WebSocket
 
-**Что даёт:** каждый новый токен на Solane в момент запуска, ещё до того как он попадёт на DexScreener.
+**What it provides:** every new Solana token the moment it launches, before it appears on DexScreener.
 
 **Endpoint:**
 ```
 wss://pumpportal.fun/api/data
 ```
 
-**Подписка на новые токены:**
+**Subscribing to new tokens:**
 ```python
 import websockets
 import json
@@ -21,7 +21,6 @@ import json
 async def listen_pumpfun():
     uri = "wss://pumpportal.fun/api/data"
     async with websockets.connect(uri) as ws:
-        # подписываемся на новые токены
         await ws.send(json.dumps({
             "method": "subscribeNewToken"
         }))
@@ -30,7 +29,7 @@ async def listen_pumpfun():
             await handle_new_token(data)
 ```
 
-**Структура события:**
+**Event structure:**
 ```json
 {
   "mint": "TokenAddressHere",
@@ -45,30 +44,30 @@ async def listen_pumpfun():
 }
 ```
 
-**Важно:**
-- pump.fun токены начинают с ~30 SOL ликвидности (виртуальной)
-- Только при достижении market cap ~$69k токен листится на Raydium
-- Большинство токенов умирают раньше — нужны хорошие фильтры
+**Notes:**
+- pump.fun tokens start with ~30 SOL virtual liquidity
+- A token graduates to Raydium only after reaching ~$69k market cap
+- Most tokens die before graduating — strong filters are essential
 
 ---
 
 ## 2. DexScreener API
 
-**Что даёт:** новые торговые пары на Solane (не только pump.fun), цену, объём, ликвидность, транзакции.
+**What it provides:** new trading pairs on Solana (beyond pump.fun), price, volume, liquidity, transactions.
 
 **Endpoints:**
 ```
-# Новые пары (polling каждые 30 сек)
+# New pairs (polled every 5 min)
 GET https://api.dexscreener.com/token-profiles/latest/v1
 
-# Данные по конкретному токену
+# Data for a specific token
 GET https://api.dexscreener.com/latest/dex/tokens/{address}
 
-# Поиск по тикеру
+# Search by ticker
 GET https://api.dexscreener.com/latest/dex/search?q={symbol}
 ```
 
-**Пример ответа по токену:**
+**Example token response:**
 ```json
 {
   "pairs": [{
@@ -91,26 +90,25 @@ GET https://api.dexscreener.com/latest/dex/search?q={symbol}
 }
 ```
 
-**Что смотрим:**
-- `liquidity.quote` — ликвидность в SOL (мин. 50 SOL)
-- `txns.h1.buys / sells` — соотношение покупок к продажам
-- `priceChange.h1` — рост за час
-- `pairCreatedAt` — возраст пары
+**Key fields:**
+- `liquidity.quote` — liquidity in SOL (minimum 50 SOL)
+- `txns.h1.buys / sells` — buy-to-sell ratio
+- `priceChange.h1` — hourly price change
+- `pairCreatedAt` — pair age
 
 ---
 
 ## 3. Twitter / X API
 
-**Что даёт:** упоминания токенов от реальных людей и KOL-аккаунтов до того, как цена улетела.
+**What it provides:** token mentions from real accounts and KOLs before the price moves.
 
-**Используем:** X API v2, Filtered Stream или Recent Search
+**Used:** X API v2, Recent Search
 
 ```python
 import tweepy
 
 client = tweepy.Client(bearer_token=BEARER_TOKEN)
 
-# Поиск свежих твитов по тикеру
 def search_token_tweets(symbol: str, hours: int = 1) -> list:
     query = f"${symbol} OR #{symbol} lang:en -is:retweet"
     tweets = client.search_recent_tweets(
@@ -123,16 +121,15 @@ def search_token_tweets(symbol: str, hours: int = 1) -> list:
     return tweets.data or []
 ```
 
-**Filtered Stream (для мониторинга в реальном времени):**
+**Filtered Stream (for real-time monitoring):**
 ```python
-# Слушаем твиты с упоминанием Solana токенов
 rules = [
     {"value": "pump.fun lang:en", "tag": "pumpfun_mentions"},
     {"value": "$SOL new token lang:en", "tag": "new_tokens"},
 ]
 ```
 
-**Метрики для оценки твита:**
+**Tweet scoring metrics:**
 ```python
 tweet_score = {
     "author_followers": tweet.author.public_metrics["followers_count"],
@@ -142,24 +139,24 @@ tweet_score = {
 }
 ```
 
-**KOL Whitelist** — список известных крипто-инфлюенсеров, чьи упоминания дают высокий вес сигналу.
+**KOL Whitelist** — list of known crypto influencers whose mentions carry high signal weight.
 
 ---
 
-## Приоритет источников
+## Source Priority
 
-| Источник | Скорость | Надёжность | Ранний сигнал |
-|----------|----------|------------|---------------|
-| pump.fun WS | мгновенно | высокая | да — лучший |
-| DexScreener | ~30 сек | высокая | нет |
-| Twitter | 1-5 мин | средняя | иногда |
+| Source | Speed | Reliability | Early signal |
+|--------|-------|-------------|--------------|
+| pump.fun WS | instant | high | yes — best |
+| DexScreener | ~30 sec | high | no |
+| Twitter | 1–5 min | medium | sometimes |
 
-**Лучший сценарий:** Twitter сигнал → pump.fun запуск → DexScreener подтверждение
+**Best scenario:** Twitter signal → pump.fun launch → DexScreener confirmation
 
 ---
 
-## Ссылки
+## Links
 
-- [[Architecture]] — как источники встроены в общую схему
-- [[Components/AI Analyzer]] — что анализируем из этих данных
-- [[Strategy/Filters and Security]] — что фильтруем до AI
+- [[Architecture]] — how sources fit into the overall system
+- [[Components/AI Analyzer]] — what is analysed from these sources
+- [[Strategy/Filters and Security]] — what is filtered before AI

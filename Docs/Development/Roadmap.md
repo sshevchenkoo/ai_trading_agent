@@ -1,110 +1,110 @@
-# Roadmap — Етапи розробки
+# Roadmap — Development Phases
 
 ---
 
-## Фаза 1: Фундамент ✅ ЗАВЕРШЕНО
+## Phase 1: Foundation ✅ COMPLETE
 
-**Ціль:** бачити токени і логувати сигнали, без реальних угод.
+**Goal:** observe tokens and log signals, no real trades.
 
-### Задачі
-- [x] Налаштувати проект (pyproject.toml, .env, структура папок)
-- [x] Підключити pump.fun WebSocket — слухати нові токени
-- [x] Підключити DexScreener API — отримувати метрики токенів
-- [x] Реалізувати базові Rule Filters (ліквідність, холдери, вік)
-- [x] Налаштувати БД (SQLite) — зберігати всі побачені токени
-- [x] Структуроване логування (structlog)
-- [x] Rugcheck API інтеграція
-
----
-
-## Фаза 2: AI Аналіз ✅ ЗАВЕРШЕНО
-
-**Ціль:** мультиагентний аналіз кожного токена через Claude.
-
-### Задачі
-- [x] Birdeye інтеграція — security, holders, on-chain дані
-- [x] GMGN інтеграція — smart money, dev behavior
-- [x] Twitter інтеграція — KOL mentions, sentiment, narrative hype
-- [x] CoinGecko — ціна SOL/BTC, ринковий контекст
-- [x] Python pre-filter (DexScreener + Birdeye hard rules, без Claude)
-- [x] Twitter спеціаліст (Haiku) — аналіз соціальних сигналів
-- [x] GMGN спеціаліст (Haiku) — аналіз smart money
-- [x] Master agent (Opus) — фінальний вердикт на основі всіх звітів
-- [x] Гібридна архітектура: ~90% токенів відхиляється без Claude викликів
-
-**Поточна вартість:** ~$0.50-2/день (vs ~$10-20 у першій версії)
+### Tasks
+- [x] Set up project (pyproject.toml, .env, folder structure)
+- [x] pump.fun WebSocket — listen for new tokens
+- [x] DexScreener API — fetch token metrics
+- [x] Basic Rule Filters (liquidity, holders, age)
+- [x] Database (SQLite) — store all seen tokens
+- [x] Structured logging (structlog)
+- [x] Rugcheck API integration
 
 ---
 
-## Фаза 3: Виконання угод (Поточна)
+## Phase 2: AI Analysis ✅ COMPLETE
 
-**Ціль:** реальні угоди з маленьким депозитом.
+**Goal:** multi-agent analysis of every token via Claude.
 
-### Задачі
-- [ ] Реалізувати `trading/wallet.py` (завантаження keypair)
-- [ ] Jupiter API інтеграція — отримання котировок і виконання свопів
-- [ ] `trading/executor.py` — buy і sell функції
-- [ ] `positions/manager.py` — відстеження відкритих позицій
-- [ ] Price monitoring loop (кожні 10 сек)
-- [ ] Автоматичні продажі: x2 → 50%, x4 → 25%, x10 → 100%, -50% стоп-лосс
-- [ ] Тест на devnet з фейковими токенами
+### Tasks
+- [x] Birdeye integration — security, holders, on-chain data
+- [x] GMGN integration — smart money, dev behaviour
+- [x] Twitter integration — KOL mentions, sentiment, narrative hype
+- [x] CoinGecko — SOL/BTC price, market context
+- [x] Python pre-filter (DexScreener + Birdeye hard rules, zero Claude calls)
+- [x] Twitter specialist (Haiku) — social signal analysis
+- [x] GMGN specialist (Haiku) — smart money analysis
+- [x] Master agent (Opus) — final verdict based on all reports
+- [x] Hybrid architecture: ~90% of tokens rejected without Claude calls
 
-**Стартовий депозит: 0.5 SOL** (для тестування)
+**Current cost:** ~$0.50–2/day (vs ~$10–20 in the first version)
 
 ---
 
-## Фаза 4: Оптимізація
+## Phase 3: Trade Execution ✅ COMPLETE
 
-**Ціль:** покращити точність і дохідність на основі реальних даних.
+**Goal:** real trades with a small deposit.
 
-### Задачі
-- [ ] Аналіз перших 2 тижнів торгівлі
-- [ ] Налаштування порогів pre-filter на основі даних
-- [ ] Покращення промптів (на основі що вгадав / не вгадав)
-- [ ] Trailing Stop реалізація
+### Tasks
+- [x] `trading/wallet.py` — keypair loading
+- [x] Jupiter API integration — quotes and swap execution
+- [x] `trading/executor.py` — buy and sell functions
+- [x] `positions/manager.py` — open position tracking
+- [x] Price monitoring loop (every 10 sec)
+- [x] Auto-sells: x2 → 50%, x4 → 25%, x10 → 100%, -50% stop-loss
+- [ ] Test on devnet with test tokens
+
+**Starting deposit: 0.5 SOL** (for testing)
+
+---
+
+## Phase 4: Optimisation
+
+**Goal:** improve accuracy and profitability using real trade data.
+
+### Tasks
+- [ ] Analyse first 2 weeks of trading
+- [ ] Tune pre-filter thresholds based on data
+- [ ] Improve prompts (based on what the bot called right / wrong)
+- [ ] Trailing Stop implementation
 - [ ] Anti-sandwich protection (Jito bundles)
-- [ ] Telegram алерти: купив, продав, стоп-лосс
+- [ ] Telegram alerts: bought, sold, stop-loss
 
-### Telegram алерти (приклад)
+### Telegram alerts (example)
 ```
-🟢 КУПИВ $BONK2
-   Сума: 0.2 SOL | Ціна: $0.0000234
-   AI Score: 8.4/10 | Нарратив: "trump dog meme"
+🟢 BOUGHT $BONK2
+   Amount: 0.2 SOL | Price: $0.0000234
+   AI Score: 8.4/10 | Narrative: "trump dog meme"
 
-🔴 ПРОДАВ $BONK2 (50% → x2 ціль)
-   Отримано: ~0.2 SOL | P&L: +0.2 SOL (+100%)
+🔴 SOLD $BONK2 (50% → x2 target)
+   Received: ~0.2 SOL | P&L: +0.2 SOL (+100%)
 ```
 
 ---
 
-## Фаза 5: Масштабування
+## Phase 5: Scaling
 
-**Ціль:** збільшити депозит і оптимізувати під прибутковість.
+**Goal:** increase deposit and optimise for profitability.
 
-### Задачі
-- [ ] Збільшити депозит до 2-5 SOL (тільки якщо Фаза 4 прибуткова)
+### Tasks
+- [ ] Increase deposit to 2–5 SOL (only if Phase 4 is profitable)
 - [ ] Whale wallet tracking (Birdeye smart money)
-- [ ] Розширити KOL моніторинг
-- [ ] Бектестинг на 3+ місяці історичних даних
-- [ ] Автоматичний ребаланс розмірів позицій
+- [ ] Expand KOL monitoring list
+- [ ] Backtesting on 3+ months of historical data
+- [ ] Automatic position size rebalancing
 
 ---
 
-## Метрики успіху
+## Success Metrics
 
-| Метрика | Незадовільно | Добре | Відмінно |
-|---------|-------------|-------|---------|
-| Win rate | < 30% | 35-50% | > 50% |
-| Avg winner | < x1.5 | x2-x3 | > x4 |
-| Max drawdown | > 50% | 20-40% | < 20% |
-| ROI / місяць | < 0% | 20-50% | > 100% |
+| Metric | Poor | Good | Excellent |
+|--------|------|------|-----------|
+| Win rate | < 30% | 35–50% | > 50% |
+| Avg winner | < x1.5 | x2–x3 | > x4 |
+| Max drawdown | > 50% | 20–40% | < 20% |
+| ROI / month | < 0% | 20–50% | > 100% |
 
-**Головне правило:** якщо за 2 тижні paper trading система збиткова — не переходити до реальних грошей, аналізувати і фіксити фільтри.
+**Core rule:** if the system is unprofitable after 2 weeks of paper trading — do not move to real money; analyse and fix the filters.
 
 ---
 
-## Посилання
+## Links
 
-- [[🏠 Home]] — загальний статус проекту
-- [[Development/Tech Stack]] — що використовуємо
-- [[Strategy/Trading Strategy]] — параметри для налаштування
+- [[🏠 Home]] — overall project status
+- [[Development/Tech Stack]] — what we use
+- [[Strategy/Trading Strategy]] — parameters to tune

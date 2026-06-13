@@ -1,143 +1,143 @@
-# Стратегия торговли
+# Trading Strategy
 
 ---
 
-## Два типа сигналов
+## Two signal types
 
-### Тип 1: Новый токен на pump.fun
-- Токен только что запущен (0-30 минут)
-- Ловим на ранней стадии пампа
-- Высокий риск / высокий потенциал
-- Ключевой критерий: качество нарратива + начальная скорость роста
+### Type 1: New token on pump.fun
+- Token just launched (0–30 minutes ago)
+- Catching it in the early pump stage
+- High risk / high potential
+- Key criterion: narrative quality + initial growth speed
 
-### Тип 2: Старый токен с новым хайпом
-- Токен уже существует (часы / дни)
-- KOL начал упоминать в Twitter
-- Меньший потенциал x, но более предсказуемо
-- Ключевой критерий: размер аудитории твиттера + объём до упоминания
+### Type 2: Existing token with new hype
+- Token has been around for hours or days
+- A KOL just started mentioning it on Twitter
+- Lower multiple potential, but more predictable
+- Key criterion: audience size + volume before the mention
 
 ---
 
-## Критерии входа
+## Entry criteria
 
 ```
-Обязательные (Rule Filters):
-  ✓ Ликвидность ≥ 50 SOL
-  ✓ Холдеров ≥ 100 человек
-  ✓ Топ-10 холдеров < 50% supply
-  ✓ Dev кошелёк не продал
-  ✓ Нет признаков honeypot (mint authority не revoked — осторожно)
+Required (Rule Filters):
+  ✓ Liquidity ≥ 50 SOL
+  ✓ Holders ≥ 100
+  ✓ Top-10 holders < 50% of supply
+  ✓ Dev wallet has not sold
+  ✓ No honeypot indicators (mint authority revoked)
 
-Желательные:
-  ✓ Buy/Sell ratio за час ≥ 3:1
-  ✓ Есть твиты от реальных аккаунтов
-  ✓ Уникальный нарратив (не клон популярного)
-  ✓ Рост цены ≥ 20% за последние 30 минут
+Desired:
+  ✓ Buy/Sell ratio over last hour ≥ 3:1
+  ✓ Tweets from real accounts
+  ✓ Unique narrative (not a clone of a popular token)
+  ✓ Price up ≥ 20% in last 30 minutes
 
 AI Score (Claude):
-  ✓ final_score ≥ 7.0 из 10
+  ✓ final_score ≥ 7.0 out of 10
 ```
 
 ---
 
-## Размер позиции
+## Position sizing
 
 ```
-Базовый капитал: 3-5 SOL (всего в боте)
+Base capital: 3–5 SOL (total in bot)
 
-Распределение по скору:
-  score 6.0-7.0 → 0.05 SOL (1% капитала)
-  score 7.0-8.0 → 0.10 SOL (2% капитала)
-  score 8.0-8.5 → 0.20 SOL (4% капитала)
-  score 8.5+    → 0.30 SOL (6% капитала)
+Size by score:
+  score 6.0–7.0 → 0.05 SOL (1% of capital)
+  score 7.0–8.0 → 0.10 SOL (2% of capital)
+  score 8.0–8.5 → 0.20 SOL (4% of capital)
+  score 8.5+    → 0.30 SOL (6% of capital)
 
-Максимум одновременно открытых позиций: 5
-Максимальная экспозиция: 50% от депозита
-```
-
----
-
-## Стратегия выхода (частичные продажи)
-
-```
-ПОКУПКА: X токенов за P SOL
-
-При цене x2:
-  → Продаём 50% токенов
-  → Получаем ~P SOL (вернули вложенное)
-  → Оставшиеся 50% — "бесплатные"
-
-При цене x4:
-  → Продаём 50% от остатка (25% от начала)
-  → Фиксируем дополнительную прибыль
-  → Остаток 25% — едем дальше
-
-При цене x10:
-  → Продаём всё оставшееся
-  → Если не дошло до x10 и началось падение — Trailing Stop
-```
-
-### Почему частичные продажи, а не всё сразу?
-
-| Стратегия | Риск | Доходность |
-|-----------|------|------------|
-| Продать всё на x2 | низкий | ограниченная |
-| Ждать x10 и продать всё | высокий | высокая, но редко |
-| **Частичные продажи** | **средний** | **стабильно высокая** |
-
-Meme токены часто делают x2-x5, потом откатываются на 80%. Частичные продажи позволяют взять и краткосрочный рост, и поймать редкие x10.
-
----
-
-## Стоп-лосс
-
-```
-Фиксированный: -50% от цены входа → продаём всё немедленно
-
-Почему -50%:
-  - meme токены волатильны, -20% — обычный откат
-  - -50% — уже явный сигнал что история не работает
-  - Потеря 0.5x на одной сделке компенсируется одним x4 на другой
-
-После первого x2:
-  Trailing Stop: -30% от максимума
-  → Если цена упала на 30% от пика — продаём остаток
+Maximum simultaneous open positions: 5
+Maximum total exposure: 50% of deposit
 ```
 
 ---
 
-## Дневные лимиты (риск-менеджмент)
+## Exit strategy (partial sells)
 
 ```
-Ежедневный стоп:
-  Если потеряли 1 SOL за день → стоп торговли до следующего дня
+BUY: X tokens for P SOL
 
-Недельный стоп:
-  Если баланс упал на 30% от стартового → пауза на анализ
+At x2 price:
+  → Sell 50% of tokens
+  → Receive ~P SOL (capital recovered)
+  → Remaining 50% are "free"
 
-Максимальные расходы на AI:
-  ≤ $5/день на Claude API вызовы
+At x4 price:
+  → Sell 50% of remainder (25% from original)
+  → Lock additional profit
+  → Remaining 25% rides further
+
+At x10 price:
+  → Sell everything remaining
+  → If x10 not reached and price falls → Trailing Stop
+```
+
+### Why partial sells instead of all at once?
+
+| Strategy | Risk | Return |
+|----------|------|--------|
+| Sell everything at x2 | low | capped |
+| Wait for x10, sell all | high | high, but rare |
+| **Partial sells** | **medium** | **consistently high** |
+
+Meme tokens often do x2–x5 then retrace 80%. Partial sells capture both the short-term gain and rare x10 runs.
+
+---
+
+## Stop-loss
+
+```
+Fixed: -50% from entry price → sell everything immediately
+
+Why -50%:
+  - Meme tokens are volatile, -20% is a normal pullback
+  - -50% is a clear signal the thesis failed
+  - Losing 0.5x on one trade is covered by one x4 on another
+
+After first x2:
+  Trailing Stop: -30% from peak
+  → If price falls 30% from its high → sell the remainder
 ```
 
 ---
 
-## Лучшее время для торговли
-
-На основе исторических данных pump.fun:
+## Daily limits (risk management)
 
 ```
-UTC 13:00-21:00 (Нью-Йорк 09:00-17:00) — самый активный период
-UTC 00:00-04:00 (Азия) — второй по активности
+Daily stop:
+  If 1 SOL lost in a day → halt trading until next day
 
-Избегать:
-  UTC 04:00-10:00 — низкий объём, много фейковых пампов
-  Выходные — ниже объём, больше скамов
+Weekly stop:
+  If balance falls 30% below starting balance → pause for analysis
+
+Maximum AI spending:
+  ≤ $5/day on Claude API calls
 ```
 
 ---
 
-## Ссылки
+## Best trading hours
 
-- [[Strategy/Filters and Security]] — детали фильтров для входа
-- [[Components/Position Manager]] — реализация выходов
-- [[Components/AI Analyzer]] — как считается score
+Based on historical pump.fun data:
+
+```
+UTC 13:00–21:00 (New York 09:00–17:00) — most active period
+UTC 00:00–04:00 (Asia session) — second most active
+
+Avoid:
+  UTC 04:00–10:00 — low volume, many fake pumps
+  Weekends — lower volume, more scams
+```
+
+---
+
+## Links
+
+- [[Strategy/Filters and Security]] — entry filter details
+- [[Components/Position Manager]] — exit implementation
+- [[Components/AI Analyzer]] — how score is calculated

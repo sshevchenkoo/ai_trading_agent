@@ -1,35 +1,35 @@
-# Фільтри і безпека
+# Filters and Security
 
-Двостадійна система відсіювання. ~90%+ токенів відхиляються до Claude.
+Two-stage filtering system. ~90%+ of tokens are rejected before reaching Claude.
 
 ---
 
-## Стадія 0: mcap фільтр (Poller)
+## Stage 0: mcap gate (Poller)
 
 ```python
-MIN_MARKET_CAP_USD = 5_000  # токени з mcap < $5k → discard
+MIN_MARKET_CAP_USD = 5_000  # tokens with mcap < $5k → discard
 ```
 
-Після DexScreener enrich — якщо ринкова капіталізація менше $5k, токен відкидається одразу.
+After DexScreener enrichment — if market cap is below $5k, the token is immediately discarded.
 
 ---
 
-## Стадія 1: Python pre-filter (без Claude)
+## Stage 1: Python pre-filter (zero Claude calls)
 
-Паралельний запит DexScreener + Birdeye, детерміновані правила. **0 Claude API викликів.**
+Parallel DexScreener + Birdeye requests, deterministic rules. **Zero Claude API calls.**
 
-### DexScreener перевірки
+### DexScreener checks
 
 ```python
-MIN_BUYS_1H = 5           # мінімум 5 buy транзакцій за останню годину
-MIN_VOLUME_1H_USD = 500   # мінімум $500 обʼєму за годину
+MIN_BUYS_1H = 5           # minimum 5 buy transactions in the last hour
+MIN_VOLUME_1H_USD = 500   # minimum $500 volume in the last hour
 
 if not pairs:             → reject "no_dex_pairs"
 if buys_1h < 5:           → reject "buys_1h=N < 5"
 if volume_1h_usd < 500:   → reject "volume_1h=$N < $500"
 ```
 
-### Birdeye security перевірки
+### Birdeye security checks
 
 ```python
 if is_mintable:                → reject "mint_authority_not_revoked"
@@ -40,55 +40,55 @@ if lp_locked_pct is not None
    and lp_locked_pct < 10:     → reject "lp_locked_Xpct"
 ```
 
-### Результат pre-filter
+### Pre-filter result
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  ~90% токенів відхиляються на цьому рівні        │
-│  0 Claude API викликів витрачено                 │
-│  Дані DexScreener + Birdeye зберігаються →       │
-│  передаються в Stage 3 (Master agent)            │
+│  ~90% of tokens rejected at this stage           │
+│  Zero Claude API calls spent                     │
+│  DexScreener + Birdeye data is preserved →       │
+│  passed to Stage 3 (Master agent)                │
 └──────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Стадія 2: Specialist agents (Haiku, паралельно)
+## Stage 2: Specialist agents (Haiku, parallel)
 
-Для токенів що пройшли pre-filter (~10%):
+For tokens that passed the pre-filter (~10%):
 
-- **Twitter агент** — шукає `$SYMBOL` і тему назви токена; оцінює органічність хайпу
-- **GMGN агент** — smart money holders, поведінка dev'а, rug ratio
+- **Twitter agent** — searches `$SYMBOL` and the token's name theme; scores organic vs bot hype
+- **GMGN agent** — smart money holders, dev behaviour, rug ratio
 
-Якщо агент повертає помилку — Master все одно отримує 3 звіти і приймає рішення.
-
----
-
-## Стадія 3: Master agent (Opus) — фінальне рішення
-
-Hard reject правила всередині Master:
-- GMGN `rug_risk = "high"` або `dev_behavior = "dumping"` → score 1-3
-- Twitter `organic_score < 3` і `bot_likelihood = "high"` → знижує score
-- Відсутність даних → знижує confidence, не блокує
+If an agent returns an error — Master still receives 3 reports and makes its decision.
 
 ---
 
-## Підсумковий пайплайн
+## Stage 3: Master agent (Opus) — final decision
+
+Hard reject rules inside Master:
+- GMGN `rug_risk = "high"` or `dev_behavior = "dumping"` → score 1–3
+- Twitter `organic_score < 3` and `bot_likelihood = "high"` → score reduction
+- Missing data → reduces confidence, does not block
+
+---
+
+## Full pipeline summary
 
 ```
-1. mcap > $5,000 (Poller)              → відхиляє ~70% нових токенів
-2. Python pre-filter: DexScreener      → відхиляє ще ~15% (нема обʼєму)
-3. Python pre-filter: Birdeye security → відхиляє ще ~10% (security flags)
-   ─────────────────────────────────────────────────────────────────────
-   Залишається ~5% → йдуть на AI аналіз (Haiku x2 + Opus x1)
+1. mcap > $5,000 (Poller)               → rejects ~70% of new tokens
+2. Python pre-filter: DexScreener        → rejects ~15% more (no volume)
+3. Python pre-filter: Birdeye security   → rejects ~10% more (security flags)
+   ─────────────────────────────────────────────────────────────────────────
+   ~5% remaining → go to AI analysis (Haiku ×2 + Opus ×1)
 ```
 
-**Claude API витрати:** тільки для ~5% токенів. 3 виклики на токен (~$0.02).
+**Claude API cost:** only for ~5% of tokens. 3 calls per token (~$0.02).
 
 ---
 
-## Посилання
+## Links
 
-- [[Components/AI Analyzer]] — мультиагентний аналіз
-- [[Strategy/Trading Strategy]] — умови входу в угоду
-- [[Components/Data Sources]] — звідки беремо дані
+- [[Components/AI Analyzer]] — multi-agent analysis
+- [[Strategy/Trading Strategy]] — trade entry conditions
+- [[Components/Data Sources]] — where data comes from

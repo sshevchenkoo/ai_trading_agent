@@ -1,37 +1,37 @@
 # Solana AI Trading Agent
 
-> Автоматический агент для торговли meme-токенами на Solana. Мониторит pump.fun, Twitter и DexScreener, анализирует с помощью AI, исполняет сделки через Jupiter.
+> Automated meme-token trading bot on Solana. Monitors pump.fun, Twitter, and DexScreener, analyses tokens with Claude AI, and executes trades via Jupiter.
 
 ---
 
-## Навигация
+## Navigation
 
-| Раздел | Описание |
-|--------|----------|
-| [[Architecture]] | Общая схема системы и взаимодействие компонентов |
-| [[Components/Data Sources]] | Источники данных — pump.fun, Twitter, DexScreener |
-| [[Components/AI Analyzer]] | Анализ сигналов через Claude API |
-| [[Components/Trade Executor]] | Исполнение сделок через Jupiter + Solana wallet |
-| [[Components/Position Manager]] | Управление открытыми позициями |
-| [[Strategy/Trading Strategy]] | Когда покупать, когда продавать, размер позиции |
-| [[Strategy/Filters and Security]] | Защита от скамов и потери депозита |
-| [[Development/Tech Stack]] | Библиотеки, инструменты, языки |
-| [[Development/Roadmap]] | Этапы разработки — от MVP до продакшна |
-
----
-
-## Суть проекта в одном абзаце
-
-Агент слушает WebSocket pump.fun и видит каждый новый токен на Solане в момент запуска. Параллельно мониторит Twitter на упоминания токенов от KOL-аккаунтов. Когда токен проходит автоматические фильтры (ликвидность, холдеры, отсутствие rug-признаков), Claude анализирует контекст и выставляет оценку. При высоком скоре — покупка через Jupiter. Продажа происходит автоматически по стратегии частичных выходов при x2 / x4 / x10, со стоп-лоссом на -50%.
+| Section | Description |
+|---------|-------------|
+| [[Architecture]] | System overview and component interactions |
+| [[Components/Data Sources]] | Data sources — pump.fun, Twitter, DexScreener |
+| [[Components/AI Analyzer]] | Token analysis via Claude API |
+| [[Components/Trade Executor]] | Trade execution via Jupiter + Solana wallet |
+| [[Components/Position Manager]] | Open position management |
+| [[Strategy/Trading Strategy]] | When to buy, when to sell, position sizing |
+| [[Strategy/Filters and Security]] | Scam protection and capital preservation rules |
+| [[Development/Tech Stack]] | Libraries, tools, languages |
+| [[Development/Roadmap]] | Development phases — from MVP to production |
 
 ---
 
-## Статус
+## Summary
 
-- [x] Архитектура спроектирована
-- [ ] MVP: pump.fun listener + базовые фильтры
-- [ ] Интеграция Claude API
-- [ ] Jupiter swap executor
-- [ ] Position Manager
-- [ ] Paper trading (без реальных денег)
-- [ ] Боевой запуск с малым депозитом
+The agent listens to the pump.fun WebSocket and sees every new Solana token the moment it launches. In parallel, it monitors Twitter for token mentions from KOL accounts. When a token passes automated filters (liquidity, holders, no rug indicators), Claude analyses the context and assigns a score. At a high score, a buy is executed via Jupiter. Selling happens automatically using a partial-exit strategy at x2 / x4 / x10, with a -50% stop-loss.
+
+---
+
+## Status
+
+- [x] Architecture designed
+- [x] MVP: pump.fun listener + basic filters
+- [x] Claude API integration
+- [x] Jupiter swap executor
+- [x] Position Manager
+- [x] Paper trading (no real money)
+- [ ] Live launch with small deposit
